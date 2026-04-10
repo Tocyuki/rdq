@@ -11,6 +11,7 @@ var cli struct {
 
 	Exec command.ExecCmd `cmd:"" help:"Execute a SQL statement."`
 	Ask  command.AskCmd  `cmd:"" help:"Translate natural language to SQL and execute."`
+	GUI  command.GUICmd  `cmd:"" help:"Launch browser-based SQL client."`
 	TUI  command.TUICmd  `cmd:"" help:"Launch interactive TUI mode." default:"1"`
 }
 

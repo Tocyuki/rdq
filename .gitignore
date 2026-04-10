@@ -6,3 +6,10 @@
 *.dylib
 *.test
 *.out
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Embedded frontend build (copied from frontend/dist)
+internal/server/dist/
