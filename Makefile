@@ -4,8 +4,9 @@ build: frontend-build go-build
 
 frontend-build:
 	cd frontend && npm run build
-	rm -rf internal/server/dist
-	cp -r frontend/dist internal/server/dist
+	mkdir -p internal/server/dist
+	find internal/server/dist -mindepth 1 ! -name '.gitkeep' -delete
+	cp -R frontend/dist/. internal/server/dist/
 
 go-build:
 	go build -o rdq ./cmd/rdq/
