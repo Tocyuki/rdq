@@ -22,7 +22,10 @@ type target struct {
 }
 
 // executeMsg is sent when an SQL execution finishes (success or failure).
+// SQL is captured at run time so the history layer can record the exact
+// statement even if the editor has changed by the time the result arrives.
 type executeMsg struct {
+	SQL      string
 	Result   *queryResult
 	Err      error
 	Duration time.Duration
@@ -50,9 +53,9 @@ func runStatement(client *rdsdata.Client, target target, sql string) tea.Cmd {
 		})
 		elapsed := time.Since(start)
 		if err != nil {
-			return executeMsg{Err: err, Duration: elapsed}
+			return executeMsg{SQL: trimmed, Err: err, Duration: elapsed}
 		}
-		return executeMsg{Result: convertResult(out), Duration: elapsed}
+		return executeMsg{SQL: trimmed, Result: convertResult(out), Duration: elapsed}
 	}
 }
 

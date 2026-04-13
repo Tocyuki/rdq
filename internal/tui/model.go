@@ -5,9 +5,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tocyuki/rdq/internal/history"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -54,11 +56,51 @@ type Model struct {
 	jsonText string
 	lastErr  error
 	duration time.Duration
+
+	// History picker state.
+	historyStore *history.Store
+	historyList  list.Model
+	historyOpen  bool
+
+	// Row inspector state. inspecting hides the table and shows the JSON
+	// view of a single row using inspectorVP. inspectedRow remembers which
+	// row index is currently displayed so the footer can show "row N/M".
+	inspecting   bool
+	inspectorVP  viewport.Model
+	inspectedRow int
+
+	// Transient status message (e.g. CSV export confirmation). Cleared on
+	// the next execute or Esc.
+	flashMessage string
+}
+
+// historyItem adapts history.Entry to the list.Item interface so the picker
+// can render and filter entries.
+type historyItem struct {
+	entry history.Entry
+}
+
+func (i historyItem) FilterValue() string { return i.entry.SQL }
+func (i historyItem) Title() string       { return summarizeSQL(i.entry.SQL) }
+func (i historyItem) Description() string {
+	icon := "✓"
+	if !i.entry.Ok {
+		icon = "✗"
+	}
+	stamp := i.entry.At.Local().Format("2006-01-02 15:04:05")
+	return fmt.Sprintf("%s %s · %dms", icon, stamp, i.entry.DurationMS)
+}
+
+// summarizeSQL collapses whitespace and truncates so a multi-line statement
+// fits on one line in the picker.
+func summarizeSQL(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	return truncate(s, 80)
 }
 
 // newModel constructs an initialized Model. It does not perform any I/O; the
 // first ExecuteStatement is triggered when the user presses run.
-func newModel(client *rdsdata.Client, tgt target) Model {
+func newModel(client *rdsdata.Client, tgt target, store *history.Store) Model {
 	editor := textarea.New()
 	editor.Placeholder = "Type SQL here. Press F5 or Ctrl+R to run."
 	editor.Prompt = ""
@@ -75,6 +117,7 @@ func newModel(client *rdsdata.Client, tgt target) Model {
 	})
 
 	vp := viewport.New(0, 0)
+	inspector := viewport.New(0, 0)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -87,17 +130,29 @@ func newModel(client *rdsdata.Client, tgt target) Model {
 	hm.Styles.FullDesc = helpDescStyle
 	hm.Styles.FullSeparator = helpSepStyle
 
+	delegate := list.NewDefaultDelegate()
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(colorAccent).BorderForeground(colorAccent)
+	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.Foreground(colorAccent).BorderForeground(colorAccent)
+	hl := list.New(nil, delegate, 0, 0)
+	hl.Title = "SQL history (type to filter, Enter to load, Esc to cancel)"
+	hl.SetShowStatusBar(true)
+	hl.SetFilteringEnabled(true)
+	hl.SetShowHelp(false)
+
 	return Model{
-		editor:    editor,
-		table:     tbl,
-		jsonView:  vp,
-		helpModel: hm,
-		spin:      sp,
-		keys:      defaultKeyMap(),
-		client:    client,
-		target:    tgt,
-		focus:     focusEditor,
-		mode:      viewTable,
+		editor:       editor,
+		table:        tbl,
+		jsonView:     vp,
+		inspectorVP:  inspector,
+		helpModel:    hm,
+		spin:         sp,
+		keys:         defaultKeyMap(),
+		client:       client,
+		target:       tgt,
+		focus:        focusEditor,
+		mode:         viewTable,
+		historyStore: store,
+		historyList:  hl,
 	}
 }
 
@@ -127,6 +182,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case executeMsg:
 		m.executing = false
 		m.duration = msg.Duration
+		m.flashMessage = ""
+		m.recordHistory(msg)
 		if msg.Err != nil {
 			m.lastErr = msg.Err
 			m.result = nil
@@ -143,6 +200,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// History picker takes precedence over global bindings so the user
+		// can type / and other characters into the filter without them being
+		// consumed as shortcuts.
+		if m.historyOpen {
+			cmds = append(cmds, m.updateHistoryPicker(msg))
+			break
+		}
 		if cmd, handled := m.handleKey(msg); handled {
 			if cmd != nil {
 				cmds = append(cmds, cmd)
@@ -155,9 +219,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// handleKey implements the global key bindings (run, focus, toggle, quit).
-// It returns handled=true when the message was consumed and should not be
-// forwarded to the focused pane.
+// recordHistory appends the just-finished execution to the history store.
+// Failures are logged silently; history is non-essential so we never block
+// the UI on a write error.
+func (m *Model) recordHistory(msg executeMsg) {
+	if m.historyStore == nil || strings.TrimSpace(msg.SQL) == "" {
+		return
+	}
+	entry := history.Entry{
+		Profile:    m.target.profile,
+		Database:   m.target.database,
+		SQL:        msg.SQL,
+		At:         time.Now().UTC(),
+		DurationMS: msg.Duration.Milliseconds(),
+	}
+	if msg.Err != nil {
+		entry.Ok = false
+		entry.ErrorMsg = msg.Err.Error()
+	} else {
+		entry.Ok = true
+	}
+	_ = m.historyStore.Append(entry)
+}
+
+// handleKey implements the global key bindings (run, focus, toggle, history,
+// export, quit). It returns handled=true when the message was consumed and
+// should not be forwarded to the focused pane.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
@@ -169,6 +256,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		m.executing = true
 		m.lastErr = nil
+		m.flashMessage = ""
 		return tea.Batch(m.spin.Tick, runStatement(m.client, m.target, m.editor.Value())), true
 
 	case key.Matches(msg, m.keys.Focus):
@@ -176,6 +264,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, true
 
 	case key.Matches(msg, m.keys.ToggleView):
+		// Switching the underlying view mode also exits the inspector so
+		// the user lands somewhere consistent.
+		m.inspecting = false
 		if m.mode == viewTable {
 			m.mode = viewJSON
 		} else {
@@ -183,9 +274,32 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		return nil, true
 
+	case key.Matches(msg, m.keys.Inspect):
+		// Enter only opens the row inspector when the user is actually
+		// looking at table results. In every other state (editor focus,
+		// JSON view, no result) Enter falls through to the focused pane
+		// so it can act as a newline / scroll / etc.
+		if m.focus != focusResults || m.mode != viewTable || m.result == nil || len(m.result.Rows) == 0 {
+			return nil, false
+		}
+		m.openInspector(m.table.Cursor())
+		return nil, true
+
+	case key.Matches(msg, m.keys.History):
+		return m.openHistoryPicker(), true
+
+	case key.Matches(msg, m.keys.ExportCSV):
+		m.handleExportCSV()
+		return nil, true
+
 	case key.Matches(msg, m.keys.Clear):
-		if m.lastErr != nil {
+		if m.inspecting {
+			m.inspecting = false
+			return nil, true
+		}
+		if m.lastErr != nil || m.flashMessage != "" {
 			m.lastErr = nil
+			m.flashMessage = ""
 			return nil, true
 		}
 
@@ -196,9 +310,122 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
+// openInspector loads the JSON of the row at idx into the inspector viewport
+// and switches the result pane to inspect mode. The original table cursor is
+// preserved so closing the inspector with Esc returns the user to the same
+// row they were looking at.
+func (m *Model) openInspector(idx int) {
+	if m.result == nil || idx < 0 || idx >= len(m.result.Rows) {
+		return
+	}
+	out, err := m.result.rowJSON(idx)
+	if err != nil {
+		m.lastErr = fmt.Errorf("inspect row: %w", err)
+		return
+	}
+	m.inspectorVP.SetContent(out)
+	m.inspectorVP.GotoTop()
+	m.inspectedRow = idx
+	m.inspecting = true
+	m.lastErr = nil
+}
+
+// handleExportCSV writes the current result to a timestamped file in cwd and
+// stores the outcome in flashMessage / lastErr for the footer to display.
+func (m *Model) handleExportCSV() {
+	if m.result == nil || len(m.result.Columns) == 0 {
+		m.lastErr = fmt.Errorf("nothing to export")
+		m.flashMessage = ""
+		return
+	}
+	path, err := m.result.exportCSV()
+	if err != nil {
+		m.lastErr = fmt.Errorf("export failed: %w", err)
+		m.flashMessage = ""
+		return
+	}
+	m.lastErr = nil
+	m.flashMessage = "exported " + shortenPath(path)
+}
+
+// openHistoryPicker loads entries for the current profile/database, populates
+// the list, and synthesizes a "/" keystroke so the user is dropped straight
+// into the incremental search prompt.
+func (m *Model) openHistoryPicker() tea.Cmd {
+	if m.historyStore == nil {
+		m.lastErr = fmt.Errorf("history is unavailable")
+		return nil
+	}
+	entries, err := m.historyStore.Load(m.target.profile, m.target.database)
+	if err != nil {
+		m.lastErr = fmt.Errorf("load history: %w", err)
+		return nil
+	}
+	items := make([]list.Item, len(entries))
+	for i, e := range entries {
+		items[i] = historyItem{entry: e}
+	}
+	m.historyList.SetItems(items)
+	m.historyList.ResetFilter()
+	m.historyOpen = true
+	m.flashMessage = ""
+
+	if len(items) == 0 {
+		// Nothing to filter; still open the picker so the user sees the
+		// "No items" message rather than silently doing nothing.
+		return nil
+	}
+	// Auto-enter filter mode for incremental search the moment the picker
+	// opens. We synthesize a "/" keypress because bubbles/list does not
+	// expose a public API to set the filter state directly.
+	var cmd tea.Cmd
+	m.historyList, cmd = m.historyList.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	return cmd
+}
+
+// updateHistoryPicker handles key input while the history picker is open.
+// Enter loads the selected entry into the editor, Esc cancels (or clears the
+// active filter first), and everything else is forwarded to bubbles/list.
+func (m *Model) updateHistoryPicker(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		if m.historyList.FilterState() == list.Filtering {
+			// First Enter while typing: let bubbles/list apply the filter
+			// rather than treating it as "select".
+			break
+		}
+		if item, ok := m.historyList.SelectedItem().(historyItem); ok {
+			m.editor.SetValue(item.entry.SQL)
+			m.historyOpen = false
+			m.focus = focusEditor
+			m.editor.Focus()
+			m.table.Blur()
+			return nil
+		}
+
+	case "esc":
+		// When a filter is active, let the list clear it on the first Esc.
+		// A second Esc (Unfiltered state) closes the picker.
+		if m.historyList.FilterState() == list.Unfiltered {
+			m.historyOpen = false
+			return nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.historyList, cmd = m.historyList.Update(msg)
+	return cmd
+}
+
 // routeKey forwards an unconsumed key message to whichever pane currently
-// holds focus.
+// holds focus. When the inspector is open it gets the keys so the user can
+// scroll through the row's JSON.
 func (m *Model) routeKey(msg tea.KeyMsg) tea.Cmd {
+	if m.inspecting {
+		var cmd tea.Cmd
+		m.inspectorVP, cmd = m.inspectorVP.Update(msg)
+		return cmd
+	}
 	var cmd tea.Cmd
 	switch m.focus {
 	case focusEditor:
@@ -265,7 +492,17 @@ func (m *Model) layout() {
 	m.jsonView.Width = innerW
 	m.jsonView.Height = resultsH
 
+	m.inspectorVP.Width = innerW
+	m.inspectorVP.Height = resultsH
+
 	m.helpModel.Width = m.width
+
+	// The history picker takes over the whole window minus status + help.
+	pickerH := m.height - statusH - helpH - 2
+	if pickerH < 6 {
+		pickerH = 6
+	}
+	m.historyList.SetSize(m.width, pickerH)
 }
 
 // refreshTable rebuilds the bubbles table model from the latest queryResult
@@ -295,7 +532,7 @@ func (m *Model) refreshTable() {
 			if j < len(widths) {
 				w = widths[j]
 			}
-			row[j] = truncate(cell, w)
+			row[j] = truncate(formatCell(cell), w)
 		}
 		rows[i] = row
 	}
@@ -311,23 +548,29 @@ func (m *Model) refreshJSON() {
 }
 
 // View renders the full TUI: status bar, editor, results pane, status line,
-// and help bar.
+// and help bar. When the history picker is open it replaces the editor +
+// results panes with the list view.
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "loading..."
 	}
 
 	status := m.renderStatus()
-	editorBox := m.renderEditor()
-	resultsBox := m.renderResults()
-	footer := m.renderFooter()
 	helpLine := m.helpModel.View(m.keys)
+
+	if m.historyOpen {
+		return strings.Join([]string{
+			status,
+			m.historyList.View(),
+			helpBarStyle.Render(helpLine),
+		}, "\n")
+	}
 
 	return strings.Join([]string{
 		status,
-		editorBox,
-		resultsBox,
-		footer,
+		m.renderEditor(),
+		m.renderResults(),
+		m.renderFooter(),
 		helpBarStyle.Render(helpLine),
 	}, "\n")
 }
@@ -369,6 +612,8 @@ func (m Model) renderResults() string {
 		body = fmt.Sprintf("%s running...", m.spin.View())
 	case m.lastErr != nil:
 		body = errorStyle.Render(m.lastErr.Error())
+	case m.inspecting:
+		body = jsonStyle.Render(m.inspectorVP.View())
 	case m.result == nil:
 		body = helpStyle.Render("(no results yet)")
 	case m.mode == viewTable:
@@ -385,6 +630,12 @@ func (m Model) renderFooter() string {
 	}
 	if m.lastErr != nil {
 		return errorStyle.Render("error · " + truncate(m.lastErr.Error(), m.width-10))
+	}
+	if m.inspecting && m.result != nil {
+		return successStyle.Render(fmt.Sprintf("inspecting row %d/%d · esc to close", m.inspectedRow+1, len(m.result.Rows)))
+	}
+	if m.flashMessage != "" {
+		return successStyle.Render(m.flashMessage)
 	}
 	if m.result == nil {
 		return helpStyle.Render("ready")

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -13,10 +12,12 @@ import (
 )
 
 // queryResult is the TUI-friendly view of an RDS Data API ExecuteStatement
-// response. All cell values are pre-stringified for table rendering.
+// response. Cell values are kept in their native Go types so JSON and CSV
+// exports can preserve type information; table rendering converts them to
+// strings on demand.
 type queryResult struct {
 	Columns []string
-	Rows    [][]string
+	Rows    [][]any
 
 	// Updated is the number of rows affected for INSERT/UPDATE/DELETE.
 	// -1 means "not applicable" (e.g. SELECT).
@@ -28,34 +29,28 @@ type queryResult struct {
 // screen.
 const columnWidthCap = 40
 
-// nullDisplay is the canonical NULL marker shown in the table.
+// nullDisplay is the canonical NULL marker shown in the table and JSON view.
 const nullDisplay = "NULL"
 
 // convertResult turns an ExecuteStatement output into a queryResult by walking
-// the column metadata for headers and the records grid for cell values.
+// the column metadata for headers and the records grid for cell values. The
+// row length is normalized to len(Columns) so downstream code can rely on the
+// invariant that every row has exactly one cell per column.
 func convertResult(out *rdsdata.ExecuteStatementOutput) *queryResult {
 	if out == nil {
 		return &queryResult{}
 	}
-
 	res := &queryResult{Updated: out.NumberOfRecordsUpdated}
 
 	for _, col := range out.ColumnMetadata {
 		res.Columns = append(res.Columns, aws.ToString(col.Name))
 	}
 
-	// Normalize row length to len(Columns) so downstream code (notably
-	// refreshTable and bubbles/table) can rely on the invariant that every
-	// row has exactly one cell per column. Servers and proxies sometimes
-	// return mismatched record/metadata lengths, and tolerating that here
-	// keeps the rendering layer simple.
 	for _, record := range out.Records {
-		row := make([]string, len(res.Columns))
+		row := make([]any, len(res.Columns))
 		for i := range row {
 			if i < len(record) {
-				row[i] = fieldToString(record[i])
-			} else {
-				row[i] = nullDisplay
+				row[i] = fieldValue(record[i])
 			}
 		}
 		res.Rows = append(res.Rows, row)
@@ -63,77 +58,116 @@ func convertResult(out *rdsdata.ExecuteStatementOutput) *queryResult {
 	return res
 }
 
-// fieldToString renders a single RDS Data API Field value as a display string.
-// The Data API uses a tagged-union pattern (FieldMember*) so a type switch is
-// the canonical way to dispatch.
-func fieldToString(f types.Field) string {
+// fieldValue unwraps an RDS Data API tagged-union Field into the closest
+// native Go value. Returning interface{} (any) means JSON marshaling
+// preserves type information instead of stringifying everything.
+func fieldValue(f types.Field) any {
 	if f == nil {
-		return nullDisplay
+		return nil
 	}
 	switch v := f.(type) {
 	case *types.FieldMemberIsNull:
-		return nullDisplay
+		return nil
 	case *types.FieldMemberStringValue:
 		return v.Value
 	case *types.FieldMemberLongValue:
-		return strconv.FormatInt(v.Value, 10)
+		return v.Value
 	case *types.FieldMemberDoubleValue:
-		return strconv.FormatFloat(v.Value, 'f', -1, 64)
+		return v.Value
 	case *types.FieldMemberBooleanValue:
-		return strconv.FormatBool(v.Value)
+		return v.Value
 	case *types.FieldMemberBlobValue:
-		return fmt.Sprintf("<blob %d bytes>", len(v.Value))
+		return v.Value
 	case *types.FieldMemberArrayValue:
-		return arrayToString(v.Value)
+		return arrayValue(v.Value)
 	}
-	return "?"
+	return nil
 }
 
-// arrayToString renders an ArrayValue (one of several typed array variants)
-// as a JSON-ish list. Nested arrays are not expected from the Data API in
-// practice but we handle them recursively for safety.
-func arrayToString(a types.ArrayValue) string {
+// arrayValue converts an RDS Data API ArrayValue (one of several typed array
+// variants) into a generic []any slice.
+func arrayValue(a types.ArrayValue) any {
 	if a == nil {
-		return "[]"
+		return []any{}
 	}
 	switch v := a.(type) {
 	case *types.ArrayValueMemberStringValues:
-		quoted := make([]string, len(v.Value))
+		out := make([]any, len(v.Value))
 		for i, s := range v.Value {
-			quoted[i] = strconv.Quote(s)
+			out[i] = s
 		}
-		return "[" + strings.Join(quoted, ", ") + "]"
+		return out
 	case *types.ArrayValueMemberLongValues:
-		parts := make([]string, len(v.Value))
+		out := make([]any, len(v.Value))
 		for i, n := range v.Value {
-			parts[i] = strconv.FormatInt(n, 10)
+			out[i] = n
 		}
-		return "[" + strings.Join(parts, ", ") + "]"
+		return out
 	case *types.ArrayValueMemberDoubleValues:
-		parts := make([]string, len(v.Value))
+		out := make([]any, len(v.Value))
 		for i, n := range v.Value {
-			parts[i] = strconv.FormatFloat(n, 'f', -1, 64)
+			out[i] = n
 		}
-		return "[" + strings.Join(parts, ", ") + "]"
+		return out
 	case *types.ArrayValueMemberBooleanValues:
-		parts := make([]string, len(v.Value))
+		out := make([]any, len(v.Value))
 		for i, b := range v.Value {
-			parts[i] = strconv.FormatBool(b)
+			out[i] = b
 		}
-		return "[" + strings.Join(parts, ", ") + "]"
+		return out
 	case *types.ArrayValueMemberArrayValues:
-		parts := make([]string, len(v.Value))
+		out := make([]any, len(v.Value))
 		for i, inner := range v.Value {
-			parts[i] = arrayToString(inner)
+			out[i] = arrayValue(inner)
 		}
-		return "[" + strings.Join(parts, ", ") + "]"
+		return out
 	}
-	return "[]"
+	return []any{}
+}
+
+// formatCell renders a typed cell value as a display string for the table
+// view. NULL becomes "NULL", blobs become "<blob N bytes>", and arrays use a
+// JSON-ish notation produced by recursively formatting their elements.
+func formatCell(v any) string {
+	if v == nil {
+		return nullDisplay
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case int64:
+		return strconv.FormatInt(val, 10)
+	case float64:
+		return strconv.FormatFloat(val, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(val)
+	case []byte:
+		return fmt.Sprintf("<blob %d bytes>", len(val))
+	case []any:
+		return formatArray(val)
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+func formatArray(arr []any) string {
+	if len(arr) == 0 {
+		return "[]"
+	}
+	parts := make([]string, len(arr))
+	for i, v := range arr {
+		switch val := v.(type) {
+		case string:
+			parts[i] = strconv.Quote(val)
+		default:
+			parts[i] = formatCell(val)
+		}
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // columnWidths returns the rendered column widths needed to fit all headers
-// and rows, capped at columnWidthCap per column.
-func columnWidths(columns []string, rows [][]string) []int {
+// and cell values, capped at columnWidthCap per column.
+func columnWidths(columns []string, rows [][]any) []int {
 	widths := make([]int, len(columns))
 	for i, c := range columns {
 		widths[i] = displayWidth(c)
@@ -143,7 +177,7 @@ func columnWidths(columns []string, rows [][]string) []int {
 			if i >= len(widths) {
 				continue
 			}
-			w := displayWidth(cell)
+			w := displayWidth(formatCell(cell))
 			if w > widths[i] {
 				widths[i] = w
 			}
@@ -183,16 +217,53 @@ func truncate(s string, width int) string {
 	return string(runes[:width-1]) + "…"
 }
 
-// toJSON renders the result as a pretty-printed JSON array of row objects so
-// it can be inspected when the table view is too lossy (e.g. blobs or
-// many-column results).
+// rowJSON renders a single row as a pretty-printed JSON object with the
+// original column order preserved. encoding/json sorts map keys
+// alphabetically, which loses the SELECT order users expect, so we build the
+// outer object by hand and only delegate to json.MarshalIndent for individual
+// values (which keeps native typing for numbers, bools, blobs, and nulls).
+func (r *queryResult) rowJSON(idx int) (string, error) {
+	if r == nil || idx < 0 || idx >= len(r.Rows) {
+		return "", fmt.Errorf("row index %d out of range", idx)
+	}
+	row := r.Rows[idx]
+
+	var b strings.Builder
+	b.WriteString("{\n")
+	for i, col := range r.Columns {
+		var val any
+		if i < len(row) {
+			val = row[i]
+		}
+		valJSON, err := json.MarshalIndent(val, "  ", "  ")
+		if err != nil {
+			return "", fmt.Errorf("marshal column %q: %w", col, err)
+		}
+		keyJSON, _ := json.Marshal(col)
+		b.WriteString("  ")
+		b.Write(keyJSON)
+		b.WriteString(": ")
+		b.Write(valJSON)
+		if i < len(r.Columns)-1 {
+			b.WriteString(",")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("}")
+	return b.String(), nil
+}
+
+// toJSON renders the result as a pretty-printed JSON array of row objects.
+// Because Rows is [][]any with native Go types, encoding/json preserves
+// number/bool/null/blob(base64) without the lossy stringification of the
+// previous implementation.
 func (r *queryResult) toJSON() string {
 	if r == nil {
 		return "null"
 	}
-	rows := make([]map[string]string, 0, len(r.Rows))
+	rows := make([]map[string]any, 0, len(r.Rows))
 	for _, row := range r.Rows {
-		obj := make(map[string]string, len(r.Columns))
+		obj := make(map[string]any, len(r.Columns))
 		for i, col := range r.Columns {
 			if i < len(row) {
 				obj[col] = row[i]
@@ -205,11 +276,4 @@ func (r *queryResult) toJSON() string {
 		return fmt.Sprintf("json marshal error: %v", err)
 	}
 	return string(out)
-}
-
-// blobBase64 is exposed for tests and reserved for future use; it produces the
-// canonical base64 encoding of a blob field, mirroring how the Data API
-// returns blobs over the wire.
-func blobBase64(b []byte) string {
-	return base64.StdEncoding.EncodeToString(b)
 }

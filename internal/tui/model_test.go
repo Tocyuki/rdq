@@ -11,13 +11,13 @@ import (
 func makeResult(cols, rows int) *queryResult {
 	r := &queryResult{
 		Columns: make([]string, cols),
-		Rows:    make([][]string, rows),
+		Rows:    make([][]any, rows),
 	}
 	for c := 0; c < cols; c++ {
 		r.Columns[c] = "col" + strconv.Itoa(c)
 	}
 	for i := 0; i < rows; i++ {
-		row := make([]string, cols)
+		row := make([]any, cols)
 		for c := 0; c < cols; c++ {
 			row[c] = "v" + strconv.Itoa(i) + "_" + strconv.Itoa(c)
 		}
@@ -30,7 +30,7 @@ func makeResult(cols, rows int) *queryResult {
 // panic where bubbles/table.SetColumns synchronously rendered stale rows
 // against the new (narrower) column slice and indexed out of range.
 func TestRefreshTableHandlesShrinkingColumnCount(t *testing.T) {
-	m := newModel(nil, target{})
+	m := newModel(nil, target{}, nil)
 
 	m.result = makeResult(10, 5)
 	m.refreshTable()
@@ -46,7 +46,7 @@ func TestRefreshTableHandlesShrinkingColumnCount(t *testing.T) {
 }
 
 func TestRefreshTableHandlesGrowingColumnCount(t *testing.T) {
-	m := newModel(nil, target{})
+	m := newModel(nil, target{}, nil)
 
 	m.result = makeResult(2, 4)
 	m.refreshTable()

@@ -6,7 +6,9 @@ package tui
 
 import (
 	"errors"
+	"log"
 
+	"github.com/Tocyuki/rdq/internal/history"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
 	tea "github.com/charmbracelet/bubbletea"
@@ -39,7 +41,15 @@ func Run(cfg Config) error {
 		database: cfg.Database,
 	}
 
-	prog := tea.NewProgram(newModel(client, tgt), tea.WithAltScreen(), tea.WithMouseCellMotion())
-	_, err := prog.Run()
+	// History is a nice-to-have; if we cannot create the store we still let
+	// the TUI launch with the picker disabled.
+	store, err := history.New()
+	if err != nil {
+		log.Printf("history disabled: %v", err)
+		store = nil
+	}
+
+	prog := tea.NewProgram(newModel(client, tgt, store), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	_, err = prog.Run()
 	return err
 }
