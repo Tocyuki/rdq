@@ -6,10 +6,12 @@ type TUICmd struct{}
 
 func (c *TUICmd) Run(globals *Globals) error {
 	return tui.Run(tui.Config{
-		AWSConfig:  globals.AWSConfig,
-		Profile:    globals.Profile,
-		ClusterArn: globals.ClusterArn,
-		SecretArn:  globals.SecretArn,
-		Database:   globals.Database,
+		AWSConfig:       globals.AWSConfig,
+		Profile:         globals.Profile,
+		ClusterArn:      globals.ClusterArn,
+		SecretArn:       globals.SecretArn,
+		Database:        globals.Database,
+		BedrockModel:    globals.BedrockModel,
+		BedrockLanguage: globals.BedrockLanguage,
 	})
 }

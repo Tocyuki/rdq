@@ -22,6 +22,24 @@ type queryResult struct {
 	// Updated is the number of rows affected for INSERT/UPDATE/DELETE.
 	// -1 means "not applicable" (e.g. SELECT).
 	Updated int64
+
+	// cachedWidths memoizes columnWidths(Columns, Rows) since Rows is
+	// immutable after convertResult and refreshTable is called on every
+	// column-cursor move.
+	cachedWidths []int
+}
+
+// Widths returns the rendered display width for each column, caching the
+// result so refreshTable can scroll horizontally without re-walking every
+// cell on each keystroke.
+func (r *queryResult) Widths() []int {
+	if r == nil {
+		return nil
+	}
+	if r.cachedWidths == nil {
+		r.cachedWidths = columnWidths(r.Columns, r.Rows)
+	}
+	return r.cachedWidths
 }
 
 // columnWidthCap caps any single column at this many display cells before

@@ -18,11 +18,17 @@ import (
 
 // ClusterInfo is a flattened view of the RDS DescribeDBClusters output that is
 // useful for the picker UI and downstream Data API calls.
+//
+// MasterUserSecretArn captures the secret RDS auto-manages when the cluster
+// has "Manage master user password in AWS Secrets Manager" turned on. When
+// present it is the canonical secret to feed into the Data API, so we expose
+// it here for the secret resolver to pre-select.
 type ClusterInfo struct {
-	Identifier string
-	ARN        string
-	Engine     string
-	Endpoint   string
+	Identifier          string
+	ARN                 string
+	Engine              string
+	Endpoint            string
+	MasterUserSecretArn string
 }
 
 // ListClusters returns Aurora clusters in the configured region that have the
@@ -42,12 +48,16 @@ func ListClusters(ctx context.Context, cfg aws.Config) ([]ClusterInfo, error) {
 			if !dataAPIEnabled(c) {
 				continue
 			}
-			out = append(out, ClusterInfo{
+			info := ClusterInfo{
 				Identifier: aws.ToString(c.DBClusterIdentifier),
 				ARN:        aws.ToString(c.DBClusterArn),
 				Engine:     aws.ToString(c.Engine),
 				Endpoint:   aws.ToString(c.Endpoint),
-			})
+			}
+			if c.MasterUserSecret != nil {
+				info.MasterUserSecretArn = aws.ToString(c.MasterUserSecret.SecretArn)
+			}
+			out = append(out, info)
 		}
 	}
 	return out, nil

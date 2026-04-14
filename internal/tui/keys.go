@@ -5,15 +5,22 @@ import "github.com/charmbracelet/bubbles/key"
 // keyMap groups the TUI keybindings so the bubbles help component can render
 // them automatically and tests can introspect the bindings.
 type keyMap struct {
-	Run        key.Binding
-	Focus      key.Binding
-	ToggleView key.Binding
-	Inspect    key.Binding
-	History    key.Binding
-	ExportCSV  key.Binding
-	Clear      key.Binding
-	Help       key.Binding
-	Quit       key.Binding
+	Run            key.Binding
+	Focus          key.Binding
+	ToggleView     key.Binding
+	Inspect        key.Binding
+	History        key.Binding
+	Ask            key.Binding
+	Assist         key.Binding
+	SwitchModel    key.Binding
+	SwitchLanguage key.Binding
+	SwitchTarget   key.Binding
+	SwitchSecret   key.Binding
+	SwitchProfile  key.Binding
+	ExportCSV      key.Binding
+	Clear          key.Binding
+	Help           key.Binding
+	Quit           key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -38,6 +45,34 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("ctrl+h"),
 			key.WithHelp("^H", "history"),
 		),
+		Ask: key.NewBinding(
+			key.WithKeys("ctrl+g"),
+			key.WithHelp("^G", "ask AI (generate SQL)"),
+		),
+		Assist: key.NewBinding(
+			key.WithKeys("f6"),
+			key.WithHelp("F6", "review / analyze / explain"),
+		),
+		SwitchModel: key.NewBinding(
+			key.WithKeys("ctrl+o"),
+			key.WithHelp("^O", "switch model"),
+		),
+		SwitchLanguage: key.NewBinding(
+			key.WithKeys("ctrl+l"),
+			key.WithHelp("^L", "switch language"),
+		),
+		SwitchTarget: key.NewBinding(
+			key.WithKeys("ctrl+t"),
+			key.WithHelp("^T", "switch cluster"),
+		),
+		SwitchSecret: key.NewBinding(
+			key.WithKeys("ctrl+\\"),
+			key.WithHelp("^\\", "switch secret"),
+		),
+		SwitchProfile: key.NewBinding(
+			key.WithKeys("ctrl+p"),
+			key.WithHelp("^P", "switch profile"),
+		),
 		ExportCSV: key.NewBinding(
 			key.WithKeys("ctrl+e"),
 			key.WithHelp("^E", "export csv"),
@@ -60,13 +95,14 @@ func defaultKeyMap() keyMap {
 // ShortHelp / FullHelp implement bubbles/help.KeyMap so the help bar can
 // render the bindings in compact and expanded forms.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Run, k.Focus, k.Inspect, k.History, k.ExportCSV, k.ToggleView, k.Quit}
+	return []key.Binding{k.Run, k.Ask, k.Assist, k.SwitchModel, k.SwitchLanguage, k.SwitchProfile, k.SwitchTarget, k.SwitchSecret, k.History, k.ExportCSV, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Run, k.Focus, k.ToggleView, k.Inspect},
-		{k.History, k.ExportCSV, k.Clear},
-		{k.Help, k.Quit},
+		{k.Ask, k.Assist, k.SwitchModel, k.SwitchLanguage},
+		{k.SwitchProfile, k.SwitchTarget, k.SwitchSecret},
+		{k.History, k.ExportCSV, k.Clear, k.Help, k.Quit},
 	}
 }
