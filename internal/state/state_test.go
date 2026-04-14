@@ -44,9 +44,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Set("dev", ProfileState{
-		Cluster:  "arn:aws:rds:ap-northeast-1:123:cluster:dev",
-		Secret:   "arn:aws:secretsmanager:ap-northeast-1:123:secret:dev-abc",
-		Database: "myapp",
+		Cluster:      "arn:aws:rds:ap-northeast-1:123:cluster:dev",
+		Secret:       "arn:aws:secretsmanager:ap-northeast-1:123:secret:dev-abc",
+		Database:     "myapp",
+		BedrockModel: "us.anthropic.claude-sonnet-4-5",
 	})
 	s.Set("prod", ProfileState{
 		Cluster:  "arn:aws:rds:us-east-1:456:cluster:prod",
@@ -64,8 +65,44 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if got := loaded.Get("dev"); got.Cluster != s.Get("dev").Cluster || got.Database != "myapp" {
 		t.Errorf("dev round-trip mismatch: %+v", got)
 	}
+	if got := loaded.Get("dev"); got.BedrockModel != "us.anthropic.claude-sonnet-4-5" {
+		t.Errorf("BedrockModel did not round-trip: %+v", got)
+	}
 	if got := loaded.Get("prod"); got.Cluster != s.Get("prod").Cluster || got.Database != "core" {
 		t.Errorf("prod round-trip mismatch: %+v", got)
+	}
+}
+
+func TestProfileStateClusterSecretsRoundTrip(t *testing.T) {
+	setStatePath(t)
+
+	s, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Set("dev", ProfileState{
+		Cluster:  "arn:aws:rds:ap-northeast-1:123:cluster:dev-a",
+		Secret:   "arn:aws:secretsmanager:ap-northeast-1:123:secret:dev-a-secret",
+		Database: "myapp",
+		ClusterSecrets: map[string]string{
+			"arn:aws:rds:ap-northeast-1:123:cluster:dev-a": "arn:aws:secretsmanager:ap-northeast-1:123:secret:dev-a-secret",
+			"arn:aws:rds:ap-northeast-1:123:cluster:dev-b": "arn:aws:secretsmanager:ap-northeast-1:123:secret:dev-b-secret",
+		},
+	})
+	if err := s.Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	got := loaded.Get("dev")
+	if len(got.ClusterSecrets) != 2 {
+		t.Fatalf("expected 2 cluster_secrets entries, got %d: %+v", len(got.ClusterSecrets), got.ClusterSecrets)
+	}
+	if got.ClusterSecrets["arn:aws:rds:ap-northeast-1:123:cluster:dev-b"] != "arn:aws:secretsmanager:ap-northeast-1:123:secret:dev-b-secret" {
+		t.Errorf("dev-b mapping did not round-trip: %+v", got.ClusterSecrets)
 	}
 }
 

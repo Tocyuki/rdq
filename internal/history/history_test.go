@@ -153,3 +153,61 @@ func TestAppendEntryWithError(t *testing.T) {
 		t.Errorf("error entry not persisted correctly: %+v", got)
 	}
 }
+
+func TestSetFavoriteRoundTrip(t *testing.T) {
+	store := setHistoryPath(t)
+	at1 := time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC)
+	at2 := time.Date(2026, 4, 13, 11, 0, 0, 0, time.UTC)
+
+	if err := store.Append(Entry{Profile: "dev", Database: "myapp", SQL: "SELECT 1", At: at1, Ok: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(Entry{Profile: "dev", Database: "myapp", SQL: "SELECT 2", At: at2, Ok: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.SetFavorite(at1, true); err != nil {
+		t.Fatalf("SetFavorite: %v", err)
+	}
+
+	got, err := store.Load("dev", "myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Most-recent-first ordering: at2 then at1.
+	if len(got) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(got))
+	}
+	if got[0].Favorite {
+		t.Errorf("at2 should not be favorited: %+v", got[0])
+	}
+	if !got[1].Favorite {
+		t.Errorf("at1 should be favorited: %+v", got[1])
+	}
+
+	// Toggling off again restores the original state.
+	if err := store.SetFavorite(at1, false); err != nil {
+		t.Fatalf("SetFavorite off: %v", err)
+	}
+	got, _ = store.Load("dev", "myapp")
+	if got[1].Favorite {
+		t.Errorf("at1 should no longer be favorited: %+v", got[1])
+	}
+}
+
+func TestSetFavoriteNoMatchIsNoOp(t *testing.T) {
+	store := setHistoryPath(t)
+	if err := store.Append(Entry{Profile: "dev", Database: "myapp", SQL: "SELECT 1", At: time.Now().UTC(), Ok: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetFavorite(time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC), true); err != nil {
+		t.Errorf("expected nil for non-matching timestamp, got %v", err)
+	}
+}
+
+func TestSetFavoriteOnEmptyFile(t *testing.T) {
+	store := setHistoryPath(t)
+	if err := store.SetFavorite(time.Now(), true); err != nil {
+		t.Errorf("SetFavorite on empty store should be no-op, got %v", err)
+	}
+}

@@ -25,6 +25,9 @@ type Entry struct {
 	Ok         bool      `json:"ok"`
 	DurationMS int64     `json:"duration_ms"`
 	ErrorMsg   string    `json:"error,omitempty"`
+	// Favorite marks an entry as starred. Favorites survive across runs
+	// because the on-disk JSONL is rewritten by SetFavorite.
+	Favorite bool `json:"favorite,omitempty"`
 }
 
 // Store is a thin wrapper over the on-disk JSONL file.
@@ -105,6 +108,109 @@ func (s *Store) Load(profile, database string) ([]Entry, error) {
 	}
 	reverse(out)
 	return out, nil
+}
+
+// SetFavorite toggles the Favorite flag on the entry whose At timestamp
+// matches the given time (within nanosecond precision). The whole JSONL
+// file is rewritten atomically (tempfile + rename) because the format is
+// append-only and there is no random-access slot for a single field.
+//
+// Entries from other profiles / databases are preserved untouched. If no
+// matching entry is found the function is a no-op (returns nil).
+func (s *Store) SetFavorite(at time.Time, favorite bool) error {
+	entries, err := s.loadAll()
+	if err != nil {
+		return err
+	}
+	matched := false
+	for i := range entries {
+		if entries[i].At.Equal(at) {
+			entries[i].Favorite = favorite
+			matched = true
+		}
+	}
+	if !matched {
+		return nil
+	}
+	return s.rewriteAll(entries)
+}
+
+// loadAll reads every entry from the history file regardless of profile /
+// database. Used internally by SetFavorite to round-trip the whole log.
+func (s *Store) loadAll() ([]Entry, error) {
+	f, err := os.Open(s.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("open history file: %w", err)
+	}
+	defer f.Close()
+
+	var out []Entry
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var e Entry
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan history file: %w", err)
+	}
+	return out, nil
+}
+
+// rewriteAll writes the supplied slice back to the history file atomically
+// via a tempfile rename. Used by SetFavorite to commit a Favorite toggle.
+func (s *Store) rewriteAll(entries []Entry) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return fmt.Errorf("create history directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".history-*.jsonl")
+	if err != nil {
+		return fmt.Errorf("create temp history file: %w", err)
+	}
+	tmpName := tmp.Name()
+	w := bufio.NewWriter(tmp)
+	for _, e := range entries {
+		data, err := json.Marshal(e)
+		if err != nil {
+			tmp.Close()
+			os.Remove(tmpName)
+			return fmt.Errorf("marshal history entry: %w", err)
+		}
+		if _, err := w.Write(append(data, '\n')); err != nil {
+			tmp.Close()
+			os.Remove(tmpName)
+			return fmt.Errorf("write history entry: %w", err)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("flush history file: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("chmod temp history file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp history file: %w", err)
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename history file: %w", err)
+	}
+	return nil
 }
 
 func reverse(s []Entry) {
