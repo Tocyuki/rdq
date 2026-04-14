@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -28,6 +29,13 @@ import (
 // yankWindow is the maximum interval between two y presses for them to
 // register as a vim-style "yy" yank inside the explain overlay.
 const yankWindow = 600 * time.Millisecond
+
+// errClipboardCopy is wrapped into m.lastErr when copyResultContext fails to
+// hand the payload to the OS clipboard — typically on a headless Linux CI
+// runner with no xclip/xsel installed. Tests match on it via errors.Is so
+// they can tolerate the benign headless failure without coupling to the
+// wrapped error text.
+var errClipboardCopy = errors.New("copy failed")
 
 // askKind discriminates the three flows that share the askInput overlay.
 type askKind int
@@ -1957,7 +1965,7 @@ func (m *Model) copyResultContext() {
 		return
 	}
 	if err := clipboard.WriteAll(payload); err != nil {
-		m.lastErr = fmt.Errorf("copy failed: %w", err)
+		m.lastErr = fmt.Errorf("%w: %w", errClipboardCopy, err)
 		m.flashMessage = ""
 		return
 	}

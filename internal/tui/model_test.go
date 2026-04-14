@@ -366,12 +366,12 @@ func TestYankInspectorViaKeystrokes(t *testing.T) {
 	// yy must hit the inspecting branch and call rowJSON without
 	// complaint. clipboard.WriteAll may legitimately fail in headless
 	// CI (no xclip/xsel on ubuntu-latest); copyResultContext wraps those
-	// failures as "copy failed: ..." so we accept that specific prefix
+	// failures with errClipboardCopy, so we accept matches via errors.Is
 	// but still reject any other lastErr (e.g. a rowJSON failure) to
 	// keep the inspector branch under test.
 	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	if m.lastErr != nil && !strings.HasPrefix(m.lastErr.Error(), "copy failed:") {
+	if m.lastErr != nil && !errors.Is(m.lastErr, errClipboardCopy) {
 		t.Errorf("unexpected error after yy in inspector: %v", m.lastErr)
 	}
 	// Either flashMessage (clipboard OK) or lastErr (copy failed) must
