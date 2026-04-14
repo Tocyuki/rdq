@@ -25,15 +25,15 @@ The `gui` subcommand exposes a separate browser-based SQL client (React + Vite S
 - **Result viewer** with three sub-modes:
   - **Table view** — vim-style cursor: `j` / `k` for rows, `h` / `l` / `0` / `$` for columns, with horizontal scroll for wide tables and a `▸ ` marker on the active column
   - **JSON view** (`^J` toggle) — viewport with `j` / `k` / `gg` / `G` and `h` / `l` / `0` / `$` for horizontal scroll
-  - **Row inspector** (`Enter`) — wraps long values inside the viewport (no horizontal scroll), `j` / `k` / `gg` / `G` for navigation, footer shows `line N/M`
+  - **Row inspector** (`Enter`) — preserves long values on a single line; scroll vertically with `j` / `k` / `gg` / `G` and horizontally with `h` / `l` / `0` / `$`; footer shows `line N/M`
 - **Cursor position indicator** — table footer always shows `row N/M · col K/L <name>` so the user can tell where they are
 - **vim-style yy yank** copies the current view (table CSV / result JSON / row JSON / explanation) to the system clipboard with an auto-clearing flash confirmation (~2.5 s)
 - **CSV export** (`^E`) writes the current result to a timestamped file in cwd
-- **SQL history** stored per profile, recallable via fuzzy picker (`^H`). **Favourites**: press `^F` inside the picker to mark / unmark an entry; favourites float to the top of the list and survive across runs
+- **SQL history** stored per profile, recallable via the history picker (`^H`) with incremental substring filter. **Favourites**: press `^F` inside the picker to mark / unmark an entry; favourites float to the top of the list and survive across runs
 
 ### AI integration (Amazon Bedrock)
 
-- **Ask AI** (`^G`) — natural-language prompt → SQL **replaces** the editor contents. Multi-turn chat history is preserved within a session, so follow-ups like "now sort by created_at desc" inherit context. The chat resets when you switch cluster or profile (the previous schema no longer applies)
+- **Ask AI** (`^G`) — natural-language prompt → SQL **replaces** the editor contents. Multi-turn chat history is preserved within a session, so follow-ups like "now sort by created_at desc" inherit context. The chat resets when you switch cluster or profile (the previous schema no longer applies). Failed prompts are automatically removed from the history so retries do not duplicate turns
 - **F6 = unified review / analyze / explain** — picks the right action based on focus + screen state:
   - Editor focus + non-empty SQL → **review the SQL** (correctness / performance / safety / style)
   - Results focus + result rows → **analyze the result** (counts, distributions, outliers)
@@ -43,7 +43,7 @@ The `gui` subcommand exposes a separate browser-based SQL client (React + Vite S
 
 ### Connection management
 
-- **AWS profile picker** (`^P`) — fuzzy-search over `~/.aws/config` profiles, switch the active credentials without restarting; rebuilds the SDK clients and reloads the cached connection for the new profile
+- **AWS profile picker** (`^P`) — incremental substring search over `~/.aws/config` profiles, switch the active credentials without restarting; rebuilds the SDK clients and reloads the cached connection for the new profile
 - **Cluster picker** (`^T`) — list Aurora clusters with the Data API enabled in the active region
 - **Secret picker** (`^\`) — switch the secret used for the current cluster (read-only ↔ admin etc.) without going through the cluster picker first
 - **Automatic cluster→secret resolution** — when picking a cluster the matching secret is found via, in order:
@@ -91,6 +91,15 @@ rdq
 | `--bedrock-language` | | Override the cached response language (env: `RDQ_BEDROCK_LANGUAGE`). |
 | `--debug` | `-d` | Verbose logging. |
 
+### GUI subcommand flags
+
+Only applies to `rdq gui`. The TUI uses neither flag.
+
+| Flag | Short | Default | Description |
+| --- | --- | --- | --- |
+| `--port` | `-P` | `8080` | Port the embedded HTTP server listens on. |
+| `--no-open` | | `false` | Skip opening the browser automatically on launch. |
+
 ### TUI keybindings
 
 #### Global
@@ -108,7 +117,7 @@ rdq
 | `^\` | Switch secret for the current cluster |
 | `^O` | Switch Bedrock model |
 | `^L` | Switch Bedrock response language |
-| `^H` | SQL history picker (fuzzy filter; `^F` toggles favourite on selected entry) |
+| `^H` | SQL history picker (substring filter; `^F` toggles favourite on selected entry) |
 | `^E` | Export the current result to CSV in the working directory |
 | `Esc` | Clear error / close current overlay |
 | `?` | Toggle full help |
@@ -133,10 +142,12 @@ rdq
 | --- | --- |
 | `j` / `k` / `↓` / `↑` | Scroll one line |
 | `gg` / `G` | Jump to top / bottom |
+| `h` / `l` / `←` / `→` | Horizontal scroll (4 cells) |
+| `0` / `$` / `Home` / `End` | Jump to left / right edge |
 | `yy` | Yank current row JSON |
 | `Enter` / `Esc` | Close inspector |
 
-Long values wrap automatically — there is no horizontal scroll inside the inspector.
+Long values stay on a single line, so use `h` / `l` / `0` / `$` to scroll across wide JSON values — the same navigation as the JSON view.
 
 #### JSON view (`^J`) and explanation overlay (after `F6` on an error)
 
@@ -163,13 +174,15 @@ All pickers (profile / cluster / secret / model / language / history) support **
 **Review the SQL you just wrote**:
 
 1. With the editor focused and a SQL statement on screen, press `F6`
-2. The model returns a markdown review (correctness / performance / safety / style) inside the result pane
+2. An optional **focus area** prompt appears — type something like `performance` or `index usage` to narrow the review, or press `Enter` with an empty prompt for a general review
+3. The model returns a markdown review (correctness / performance / safety / style) inside the result pane
 
 **Analyze a query result**:
 
 1. Run a query that returns rows
 2. Press `Tab` to focus the results pane
-3. Press `F6` → the model summarises counts, distributions, outliers and surface notable patterns
+3. Press `F6` → an optional focus area prompt appears (same as review); press `Enter` with an empty prompt for a general summary, or type something like `outliers` to narrow the analysis
+4. The model summarises counts, distributions, outliers and surfaces notable patterns
 
 **Explain an error**:
 
@@ -236,7 +249,7 @@ Inside the TUI, `^P` opens the profile picker again at any time. Switching to a 
 | CLI framework | [Kong](https://github.com/alecthomas/kong) |
 | TUI framework | [Bubble Tea](https://github.com/charmbracelet/bubbletea) + [Bubbles](https://github.com/charmbracelet/bubbles) + [Lipgloss](https://github.com/charmbracelet/lipgloss) |
 | Pre-TUI fuzzy pickers | [go-fuzzyfinder](https://github.com/ktr0731/go-fuzzyfinder) |
-| In-TUI fuzzy filtering | [sahilm/fuzzy](https://github.com/sahilm/fuzzy) (substring matcher injected into bubbles/list) |
+| In-TUI picker filtering | Custom literal substring matcher injected into [bubbles/list](https://github.com/charmbracelet/bubbles) (deliberately chosen over fuzzy matching for predictable command-palette-style search) |
 | Syntax highlighting | [chroma](https://github.com/alecthomas/chroma) |
 | Clipboard | [atotto/clipboard](https://github.com/atotto/clipboard) |
 | LLM | [Amazon Bedrock Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html) |
