@@ -1,5 +1,7 @@
 # rdq
 
+[![CI](https://github.com/Tocyuki/rdq/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Tocyuki/rdq/actions/workflows/ci.yml)
+
 **RDS Data Query** — A terminal UI for querying Aurora over the AWS RDS Data API, with built-in Amazon Bedrock assistance.
 
 > [!WARNING]
