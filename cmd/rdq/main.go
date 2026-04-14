@@ -50,10 +50,10 @@ var commandsNeedingConnection = map[string]bool{
 }
 
 var cli struct {
-	Profile      string `help:"AWS profile to use. Pass without a value to launch an interactive picker." short:"p" env:"AWS_PROFILE"`
-	Cluster      string `help:"RDS cluster ARN. Pass without a value to launch an interactive picker."`
-	Secret       string `help:"Secrets Manager secret ARN. Pass without a value to launch an interactive picker."`
-	Database     string `help:"Database name. Pass without a value to pick from history or enter manually."`
+	Profile         string `help:"AWS profile to use. Pass without a value to launch an interactive picker." short:"p" env:"AWS_PROFILE"`
+	Cluster         string `help:"RDS cluster ARN. Pass without a value to launch an interactive picker."`
+	Secret          string `help:"Secrets Manager secret ARN. Pass without a value to launch an interactive picker."`
+	Database        string `help:"Database name. Pass without a value to pick from history or enter manually."`
 	BedrockModel    string `help:"Bedrock model ID for natural-language SQL generation in TUI. Overrides the cached model." env:"RDQ_BEDROCK_MODEL"`
 	BedrockLanguage string `help:"Language the AI uses when responding (e.g. Japanese, English). Overrides the cached language." env:"RDQ_BEDROCK_LANGUAGE"`
 	Debug           bool   `help:"Enable debug output." short:"d"`

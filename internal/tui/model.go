@@ -119,14 +119,14 @@ type Model struct {
 	// needed; pendingAsk / pendingExplain chain the model picker into the
 	// follow-up flow automatically. snapshot holds the schema once it has
 	// loaded asynchronously.
-	bedrockClient      *bedrock.Client
-	bedrockModel       string
-	bedrockLanguage    string
-	snapshot           *schema.Snapshot
-	askInput           textarea.Model
-	askOpen            bool
-	askExecuting       bool
-	askKind            askKind
+	bedrockClient   *bedrock.Client
+	bedrockModel    string
+	bedrockLanguage string
+	snapshot        *schema.Snapshot
+	askInput        textarea.Model
+	askOpen         bool
+	askExecuting    bool
+	askKind         askKind
 	// pending* hold the editor SQL / result snapshot captured when F6
 	// opens the focus-area overlay, so the model sees the state the
 	// user actually pointed at even if they mutate the editor / result

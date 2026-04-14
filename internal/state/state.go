@@ -24,12 +24,12 @@ type State struct {
 }
 
 type ProfileState struct {
-	Cluster         string            `json:"cluster,omitempty"`
-	Secret          string            `json:"secret,omitempty"`
-	Database        string            `json:"database,omitempty"`
-	BedrockModel    string            `json:"bedrock_model,omitempty"`
-	BedrockLanguage string            `json:"bedrock_language,omitempty"`
-	DatabaseHistory []string          `json:"database_history,omitempty"`
+	Cluster         string   `json:"cluster,omitempty"`
+	Secret          string   `json:"secret,omitempty"`
+	Database        string   `json:"database,omitempty"`
+	BedrockModel    string   `json:"bedrock_model,omitempty"`
+	BedrockLanguage string   `json:"bedrock_language,omitempty"`
+	DatabaseHistory []string `json:"database_history,omitempty"`
 	// ClusterSecrets remembers which secret ARN the user picked for each
 	// cluster ARN within this profile. The lookup is consulted before any
 	// AWS-side suggestion logic so manually managed secrets (no
