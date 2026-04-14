@@ -363,18 +363,19 @@ func TestYankInspectorViaKeystrokes(t *testing.T) {
 		t.Errorf("expected focus to stay on results inside inspector")
 	}
 
-	// yy should not error — the payload selection must hit the
-	// inspecting branch and call rowJSON without complaint.
+	// yy must hit the inspecting branch and call rowJSON without
+	// complaint. clipboard.WriteAll may legitimately fail in headless
+	// CI (no xclip/xsel on ubuntu-latest); copyResultContext wraps those
+	// failures as "copy failed: ..." so we accept that specific prefix
+	// but still reject any other lastErr (e.g. a rowJSON failure) to
+	// keep the inspector branch under test.
 	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	if m.lastErr != nil {
+	if m.lastErr != nil && !strings.HasPrefix(m.lastErr.Error(), "copy failed:") {
 		t.Errorf("unexpected error after yy in inspector: %v", m.lastErr)
 	}
-	// flashMessage path is the only observable outcome that doesn't
-	// require a working clipboard, so check the success label here.
-	// The clipboard.WriteAll may legitimately fail in headless CI; in
-	// that case lastErr is set instead. Accept either as long as the
-	// branch actually fired.
+	// Either flashMessage (clipboard OK) or lastErr (copy failed) must
+	// fire — if neither does, the yy branch wasn't reached at all.
 	if m.flashMessage == "" && m.lastErr == nil {
 		t.Errorf("expected yy to either flash or surface an error, got neither")
 	}
