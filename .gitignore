@@ -19,3 +19,6 @@ frontend/dist/
 # when the module is fetched via `go install` (no local frontend build).
 internal/server/dist/*
 !internal/server/dist/.gitkeep
+
+# GoReleaser output directory.
+/dist/
