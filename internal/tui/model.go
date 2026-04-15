@@ -228,8 +228,8 @@ type Model struct {
 	// automatically on TUI start + after Ctrl+P profile switch when the
 	// state file has no stored value, and can be reopened any time via
 	// F7 to flip the setting.
-	isProduction        bool
-	productionList      list.Model
+	isProduction         bool
+	productionList       list.Model
 	productionPromptOpen bool
 
 	// Transient status message (e.g. CSV export confirmation, yy yank).
