@@ -997,6 +997,54 @@ func TestYankPayloadByContext(t *testing.T) {
 	if payload != "## error explanation" {
 		t.Errorf("explain payload = %q", payload)
 	}
+
+	// SQL error only: executeMsg sets lastErr and clears result on
+	// failure. yy should copy the raw error string.
+	m2 := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
+	sqlErr := errors.New(`ERROR: relation "foo" does not exist`)
+	m2.lastErr = sqlErr
+	payload, label, err = m2.yankPayload()
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if label != "error" {
+		t.Errorf("error label = %q, want %q", label, "error")
+	}
+	if payload != sqlErr.Error() {
+		t.Errorf("error payload = %q, want %q", payload, sqlErr.Error())
+	}
+
+	// Explain overlay still wins when both are present — the composed
+	// explanation already embeds the original error.
+	m2.explainOpen = true
+	m2.explainText = "## analysis"
+	payload, label, _ = m2.yankPayload()
+	if label != "explanation" || payload != "## analysis" {
+		t.Errorf("explain should beat error: label=%q payload=%q", label, payload)
+	}
+}
+
+// TestYankErrorPreservesLastErr verifies that yanking an on-screen SQL
+// error does not clear it — the user asked to copy what's visible, not
+// to dismiss it.
+func TestYankErrorPreservesLastErr(t *testing.T) {
+	m := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
+	sqlErr := errors.New(`ERROR: syntax error near "FROM"`)
+	m.lastErr = sqlErr
+	m.focus = focusResults
+
+	m.copyResultContext()
+
+	if errors.Is(m.lastErr, errClipboardCopy) {
+		// Headless CI: clipboard write failed; nothing else to check.
+		return
+	}
+	if m.lastErr != sqlErr {
+		t.Errorf("SQL error should remain visible after yank, got %v", m.lastErr)
+	}
+	if m.flashMessage != "✓ error yanked to clipboard" {
+		t.Errorf("flashMessage = %q", m.flashMessage)
+	}
 }
 
 func contains(haystack, needle string) bool {

@@ -1969,7 +1969,11 @@ func (m *Model) copyResultContext() {
 		m.flashMessage = ""
 		return
 	}
-	m.lastErr = nil
+	// Keep the SQL error visible when the user yanked it — they
+	// asked to copy what's on screen, not to dismiss it.
+	if label != "error" {
+		m.lastErr = nil
+	}
 	m.flashMessage = "✓ " + label + " yanked to clipboard"
 }
 
@@ -1997,6 +2001,8 @@ func (m *Model) yankPayload() (string, string, error) {
 			return "", "", fmt.Errorf("copy table: %w", err)
 		}
 		return sb.String(), "result CSV", nil
+	case m.lastErr != nil:
+		return m.lastErr.Error(), "error", nil
 	}
 	return "", "", fmt.Errorf("nothing to copy")
 }
