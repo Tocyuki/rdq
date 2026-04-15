@@ -36,6 +36,13 @@ type ProfileState struct {
 	// MasterUserSecret, no aws:rds:primaryDBClusterArn tag) still get a
 	// one-step switch after the first manual selection.
 	ClusterSecrets map[string]string `json:"cluster_secrets,omitempty"`
+	// IsProduction marks this profile as a production environment so the
+	// TUI can paint a distinctive warning theme (red borders, PRODUCTION
+	// banner) whenever it is active. Tri-state: nil means "the user has
+	// not answered yet" — the TUI prompts on first activation; a non-nil
+	// value indicates the user made a deliberate choice and is not asked
+	// again until they explicitly reopen the toggle.
+	IsProduction *bool `json:"is_production,omitempty"`
 }
 
 // Load reads the state file. A missing file yields an empty State; a malformed

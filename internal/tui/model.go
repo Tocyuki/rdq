@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -208,12 +209,49 @@ type Model struct {
 	profileLoading    bool
 	profileSwitching  bool
 
+	// Database picker shown mid cluster-switch so the user always
+	// confirms the target database name instead of silently inheriting
+	// whatever was in m.target.database from the previous cluster.
+	// pendingOldCluster / pendingOldSecret snapshot the pre-switch
+	// target so an Esc while the picker is open reverts the entire
+	// cluster switch.
+	databaseList       list.Model
+	databasePickerOpen bool
+	pendingOldCluster  string
+	pendingOldSecret   string
+
+	// Production-environment flag + prompt. isProduction drives the
+	// warning theme (red borders, PRODUCTION banner) applied at render
+	// time. productionPromptOpen makes a small Yes/No picker the only
+	// thing that accepts input, forcing the user to answer when the
+	// flag has never been set for the active profile. The prompt opens
+	// automatically on TUI start + after Ctrl+P profile switch when the
+	// state file has no stored value, and can be reopened any time via
+	// F7 to flip the setting.
+	isProduction        bool
+	productionList      list.Model
+	productionPromptOpen bool
+
 	// Transient status message (e.g. CSV export confirmation, yy yank).
 	// flashToken is bumped every time flashMessage is set so a tea.Tick
 	// auto-clear can ignore stale ticks for messages that have already
 	// been replaced by a newer one.
 	flashMessage string
 	flashToken   uint64
+
+	// Result search state ("/" opens the prompt, n/N navigate matches).
+	// searchOpen is true while the input prompt is visible and consumes
+	// keys. searchQuery holds the committed query that drives highlight
+	// and navigation; it survives mode toggles and only clears on a new
+	// SQL execution or explicit cancel. jsonRaw is the plain (pre-Chroma)
+	// JSON text used both for matching and for line-level rerendering.
+	searchInput  textinput.Model
+	searchOpen   bool
+	searchQuery  string
+	tableHits    []tableHit
+	jsonHits     []jsonHit
+	searchCursor int
+	jsonRaw      string
 }
 
 // historyItem adapts history.Entry to the list.Item interface so the picker
@@ -331,6 +369,34 @@ func newModel(client *rdsdata.Client, tgt target, store *history.Store, bedrockC
 	pl.SetShowHelp(false)
 	pl.Filter = containsFilter
 
+	dl := list.New(nil, delegate, 0, 0)
+	dl.Title = "Database (type new name or pick from history, Enter to confirm, Esc to cancel)"
+	dl.SetShowStatusBar(true)
+	dl.SetFilteringEnabled(true)
+	dl.SetShowHelp(false)
+	dl.Filter = containsFilter
+
+	// Production flag picker. Fixed 2 rows, non-filterable because the
+	// whole point is a binary confirmation and leaving filtering on
+	// would let the user accidentally type themselves into an empty
+	// list with no way to commit.
+	prodList := list.New([]list.Item{
+		productionItem{
+			title:       "Yes — this is a PRODUCTION environment",
+			description: "rdq will paint the UI red and show a PRODUCTION banner",
+			value:       true,
+		},
+		productionItem{
+			title:       "No — non-production (dev / staging / local)",
+			description: "normal blue theme",
+			value:       false,
+		},
+	}, delegate, 0, 0)
+	prodList.Title = "Is this profile a production environment? (Enter to confirm, Esc to cancel)"
+	prodList.SetShowStatusBar(false)
+	prodList.SetFilteringEnabled(false)
+	prodList.SetShowHelp(false)
+
 	ask := textarea.New()
 	ask.Placeholder = "Ask in natural language (e.g. \"top 10 active users this week\")"
 	ask.CharLimit = 4000
@@ -346,7 +412,12 @@ func newModel(client *rdsdata.Client, tgt target, store *history.Store, bedrockC
 	// support that bubbletea v1 does not parse.
 	ask.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
 
-	return Model{
+	searchIn := textinput.New()
+	searchIn.Prompt = "/"
+	searchIn.Placeholder = "search in results (case-insensitive)"
+	searchIn.CharLimit = 256
+
+	m := Model{
 		editor:          editor,
 		table:           tbl,
 		jsonView:        vp,
@@ -370,8 +441,19 @@ func newModel(client *rdsdata.Client, tgt target, store *history.Store, bedrockC
 		clusterList:     cl,
 		secretList:      sl,
 		profileList:     pl,
+		databaseList:    dl,
+		productionList:  prodList,
 		awsConfig:       awsCfg,
+		searchInput:     searchIn,
 	}
+	// Hydrate the production flag from state for the initial profile so
+	// the warning theme is live on first render. When no value is stored
+	// yet we open the prompt immediately so the user is forced to answer
+	// before running any queries.
+	if answered := m.loadProductionFlag(); !answered {
+		m.openProductionPrompt()
+	}
+	return m
 }
 
 // Init starts the spinner ticker and kicks off an asynchronous schema fetch
@@ -419,10 +501,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.lastErr = nil
 			m.result = msg.Result
-			m.jsonText = msg.Result.toJSON()
+			m.jsonRaw = msg.Result.toJSON()
+			m.jsonText = m.jsonRaw
 			m.colCursor = 0
-			m.refreshTable()
-			m.refreshJSON()
+			// clearSearch wipes any previous query + hit state and
+			// re-renders both panes, so we do not need to call the
+			// refresh helpers a second time below.
+			m.clearSearch()
 			m.focus = focusResults
 			m.editor.Blur()
 			m.table.Focus()
@@ -553,7 +638,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Forced flow (Ctrl+\\) skips this so the user can always see
 		// the picker and confirm the choice explicitly.
 		if !forced && len(msg.secrets) == 1 && !msg.fallback {
-			cmds = append(cmds, m.applyTargetSwitch(msg.cluster, msg.secrets[0].ARN))
+			cmds = append(cmds, m.beginTargetSwitch(msg.cluster, msg.secrets[0].ARN))
 			break
 		}
 		// Multiple candidates (or fallback to all secrets) → show picker.
@@ -575,6 +660,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Picker / overlay modes consume input first so typing into them
 		// does not trigger global shortcuts.
 		switch {
+		case m.searchOpen:
+			cmds = append(cmds, m.updateSearchInput(msg))
 		case m.askOpen:
 			cmds = append(cmds, m.updateAskInput(msg))
 		case m.profilePickerOpen:
@@ -583,6 +670,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.updateClusterPicker(msg))
 		case m.secretPickerOpen:
 			cmds = append(cmds, m.updateSecretPicker(msg))
+		case m.databasePickerOpen:
+			cmds = append(cmds, m.updateDatabasePicker(msg))
+		case m.productionPromptOpen:
+			cmds = append(cmds, m.updateProductionPrompt(msg))
 		case m.modelPickerOpen:
 			cmds = append(cmds, m.updateModelPicker(msg))
 		case m.languagePickerOpen:
@@ -657,6 +748,17 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		} else {
 			m.mode = viewTable
 		}
+		// Re-align the search cursor in the new mode: the hit lists
+		// have different lengths, so resetting to 0 and rescrolling is
+		// the least surprising behaviour. Then rerender so highlights
+		// appear in the view the user just switched to.
+		if m.searchQuery != "" {
+			m.searchCursor = 0
+			m.alignSearchAnchors()
+			m.refreshTable()
+			m.refreshJSON()
+			m.focusSearchCursor()
+		}
 		return nil, true
 
 	case key.Matches(msg, m.keys.Inspect):
@@ -706,6 +808,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	case key.Matches(msg, m.keys.SwitchProfile):
 		return m.openProfilePicker(), true
 
+	case key.Matches(msg, m.keys.ToggleProduction):
+		m.openProductionPrompt()
+		return nil, true
+
 	case key.Matches(msg, m.keys.ExportCSV):
 		m.handleExportCSV()
 		return nil, true
@@ -717,6 +823,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		if m.inspecting {
 			m.inspecting = false
+			return nil, true
+		}
+		if m.searchQuery != "" {
+			// First Esc press while search highlights are active just
+			// clears them. A second Esc (no query, no error, no flash)
+			// falls through to the no-op.
+			m.clearSearch()
 			return nil, true
 		}
 		if m.lastErr != nil || m.flashMessage != "" {
@@ -988,6 +1101,27 @@ func containsFilter(term string, targets []string) []list.Rank {
 // stays editable even when an analysis is on screen, and the user can Tab
 // over to scroll / yank.
 func (m *Model) routeKey(msg tea.KeyMsg) tea.Cmd {
+	// "/" opens the incremental search prompt whenever the user is
+	// looking at results. n / N cycle through matches of the last
+	// committed query (vim style). These shortcuts are results-pane
+	// only so they don't shadow printable characters in the editor.
+	if m.focus == focusResults && !m.inspecting && !m.explainOpen {
+		switch msg.String() {
+		case "/":
+			return m.openSearch()
+		case "n":
+			if m.searchQuery != "" {
+				m.nextHit(1)
+				return nil
+			}
+		case "N":
+			if m.searchQuery != "" {
+				m.nextHit(-1)
+				return nil
+			}
+		}
+	}
+
 	// vim-style yy yank works whenever focus is on the results pane,
 	// regardless of which sub-mode (table / json / inspector / explain)
 	// is showing. copyResultContext picks the right payload.
@@ -1096,6 +1230,12 @@ func (m *Model) layout() {
 		return
 	}
 	statusH := 4
+	if m.isProduction {
+		// Production banner adds one line to the status bar, so we
+		// must shrink the available content region by the same amount
+		// to avoid the editor / results being cut off at the bottom.
+		statusH = 5
+	}
 	helpH := 1
 	footerH := 1
 	available := m.height - statusH - helpH - footerH - 4 // borders
@@ -1145,6 +1285,8 @@ func (m *Model) layout() {
 	m.clusterList.SetSize(m.width, pickerH)
 	m.secretList.SetSize(m.width, pickerH)
 	m.profileList.SetSize(m.width, pickerH)
+	m.databaseList.SetSize(m.width, pickerH)
+	m.productionList.SetSize(m.width, pickerH)
 	m.askInput.SetWidth(innerW)
 }
 
@@ -1226,6 +1368,7 @@ func (m *Model) refreshTable() {
 		cols[i] = table.Column{Title: title, Width: colWidthFor(start + i)}
 	}
 
+	curHit := m.currentTableHit()
 	rows := make([]table.Row, len(m.result.Rows))
 	for i, r := range m.result.Rows {
 		row := make(table.Row, len(visible))
@@ -1239,10 +1382,14 @@ func (m *Model) refreshTable() {
 			if absoluteCol < len(r) {
 				cell = r[absoluteCol]
 			}
+			shown := truncate(formatCell(cell), w)
+			if m.searchQuery != "" {
+				shown = highlightCell(shown, m.searchQuery, curHit, i, absoluteCol)
+			}
 			// Indent rows by the marker width so cell content lines
 			// up under the column title (which always carries the
 			// 2-cell marker prefix).
-			row[j] = "  " + truncate(formatCell(cell), w)
+			row[j] = "  " + shown
 		}
 		rows[i] = row
 	}
@@ -1258,11 +1405,53 @@ func (m *Model) refreshTable() {
 	}
 }
 
-// refreshJSON updates the JSON viewport with the cached jsonText, applying
-// chroma syntax highlighting so numbers, strings, and booleans stand out.
+// refreshJSON updates the JSON viewport content. When no search is active the
+// whole body is rendered through Chroma so numbers / strings / booleans
+// stand out with monokai colours. When a search query is active the matched
+// lines are rebuilt from the plain-text jsonRaw with lipgloss match
+// highlights — those lines temporarily lose Chroma colouring so the
+// highlighted spans are unambiguous. Non-matching lines keep Chroma output.
+//
+// The viewport's YOffset is preserved on rerenders that happen while a
+// search is active (n/N navigation) so focusSearchCursor can then jump
+// the viewport to the right line. A fresh result lands here via the
+// executeMsg path, which calls clearSearch → refreshJSON with an empty
+// query, so the GotoTop() we used to do stays accessible via that branch.
 func (m *Model) refreshJSON() {
-	m.jsonView.SetContent(highlightJSON(m.jsonText))
-	m.jsonView.GotoTop()
+	if m.searchQuery == "" {
+		m.jsonView.SetContent(highlightJSON(m.jsonText))
+		m.jsonView.GotoTop()
+		return
+	}
+
+	offset := m.jsonView.YOffset
+	// Group hits by line so highlightJSONLine only has to consider each
+	// line once. Sorted iteration not required because we index by line.
+	byLine := make(map[int]bool, len(m.jsonHits))
+	for _, h := range m.jsonHits {
+		byLine[h.line] = true
+	}
+	curHit := m.currentJSONHit()
+
+	rawLines := strings.Split(m.jsonRaw, "\n")
+	coloredLines := strings.Split(highlightJSON(m.jsonText), "\n")
+	// Defensive: Chroma should produce one output line per input line,
+	// but if counts drift we fall back to plain text to avoid an index
+	// panic.
+	out := make([]string, len(rawLines))
+	for i, raw := range rawLines {
+		if byLine[i] {
+			out[i] = highlightJSONLine(raw, m.searchQuery, curHit, i)
+			continue
+		}
+		if i < len(coloredLines) {
+			out[i] = coloredLines[i]
+		} else {
+			out[i] = raw
+		}
+	}
+	m.jsonView.SetContent(strings.Join(out, "\n"))
+	m.jsonView.SetYOffset(offset)
 }
 
 // View renders the full TUI: status bar, editor, results pane, status line,
@@ -1324,6 +1513,22 @@ func (m Model) View() string {
 		}, "\n")
 	}
 
+	if m.databasePickerOpen {
+		return strings.Join([]string{
+			status,
+			m.databaseList.View(),
+			helpBarStyle.Render(helpLine),
+		}, "\n")
+	}
+
+	if m.productionPromptOpen {
+		return strings.Join([]string{
+			status,
+			m.productionList.View(),
+			helpBarStyle.Render(helpLine),
+		}, "\n")
+	}
+
 	if m.askOpen {
 		// While the natural-language input is open the global keymap is
 		// inert (only Enter/Esc are routed). Replace the help bar with a
@@ -1358,35 +1563,53 @@ func (m Model) View() string {
 }
 
 func (m Model) renderStatus() string {
+	// Pick the accent style for the key labels so production mode
+	// visibly repaints every field name in red.
+	keyStyle := statusKeyStyle
+	if m.isProduction {
+		keyStyle = productionStatusKeyStyle
+	}
+
 	profileLabel := nonEmpty(m.target.profile)
 	if m.target.profile == "" {
 		profileLabel = helpStyle.Render("(direct credentials · ephemeral)")
 	}
 	line1 := fmt.Sprintf(
 		"%s %s   %s %s",
-		statusKeyStyle.Render("profile"),
+		keyStyle.Render("profile"),
 		profileLabel,
-		statusKeyStyle.Render("region"),
+		keyStyle.Render("region"),
 		nonEmpty(m.target.region),
 	)
 	line2 := fmt.Sprintf(
 		"%s %s   %s %s",
-		statusKeyStyle.Render("cluster"),
+		keyStyle.Render("cluster"),
 		nonEmpty(shortARN(m.target.cluster)),
-		statusKeyStyle.Render("db"),
+		keyStyle.Render("db"),
 		nonEmpty(m.target.database),
 	)
 	line3 := fmt.Sprintf(
 		"%s %s",
-		statusKeyStyle.Render("secret"),
+		keyStyle.Render("secret"),
 		nonEmpty(shortARN(m.target.secret)),
 	)
 	line4 := fmt.Sprintf(
 		"%s %s",
-		statusKeyStyle.Render("model"),
+		keyStyle.Render("model"),
 		m.formatModelStatus(),
 	)
-	return statusStyle.Render(line1 + "\n" + line2 + "\n" + line3 + "\n" + line4)
+	body := statusStyle.Render(line1 + "\n" + line2 + "\n" + line3 + "\n" + line4)
+
+	if m.isProduction {
+		// The banner stretches across the full inner width so it can
+		// never be confused with the regular status bar on narrow
+		// terminals. lipgloss .Width() sets a minimum rendered width;
+		// the inner padding already centres the text around it.
+		bannerText := "⚠  PRODUCTION  ⚠  — queries will run against a production database"
+		banner := productionBannerStyle.Width(m.width).Render(bannerText)
+		return banner + "\n" + body
+	}
+	return body
 }
 
 // formatModelStatus returns the human-friendly summary of the active Bedrock
@@ -1406,6 +1629,9 @@ func (m Model) formatModelStatus() string {
 
 func (m Model) renderEditor() string {
 	if m.focus == focusEditor {
+		if m.isProduction {
+			return productionBoxFocused.Render(m.editor.View())
+		}
 		return editorBoxFocused.Render(m.editor.View())
 	}
 	return editorBoxStyle.Render(m.editor.View())
@@ -1414,7 +1640,11 @@ func (m Model) renderEditor() string {
 func (m Model) renderResults() string {
 	style := resultBoxStyle
 	if m.focus == focusResults {
-		style = resultBoxFocused
+		if m.isProduction {
+			style = productionBoxFocused
+		} else {
+			style = resultBoxFocused
+		}
 	}
 	var body string
 	switch {
@@ -1443,6 +1673,13 @@ func (m Model) renderResults() string {
 }
 
 func (m Model) renderFooter() string {
+	if m.searchOpen {
+		// The input prompt replaces the normal footer while the user is
+		// typing a query. textinput renders its own "/" prefix (set in
+		// newModel) and a blinking caret.
+		hint := helpStyle.Render(" · enter apply · esc cancel")
+		return m.searchInput.View() + hint
+	}
 	if m.askExecuting {
 		return helpStyle.Render(fmt.Sprintf("%s generating SQL with AI...", m.spin.View()))
 	}
@@ -1526,6 +1763,14 @@ func (m Model) renderFooter() string {
 	}
 	if m.focus == focusResults {
 		parts = append(parts, "yy to copy")
+	}
+	if m.searchQuery != "" {
+		total := m.currentHitCount()
+		if total == 0 {
+			parts = append(parts, fmt.Sprintf("search %q: 0 matches", m.searchQuery))
+		} else {
+			parts = append(parts, fmt.Sprintf("search %q: %d/%d · n/N", m.searchQuery, m.searchCursor+1, total))
+		}
 	}
 	return successStyle.Render(strings.Join(parts, " · "))
 }
@@ -1612,6 +1857,33 @@ func (i secretItem) Description() string {
 	}
 	return shortARN(i.secret.ARN)
 }
+
+// databaseItem wraps a previously-used database name so the in-TUI
+// database picker (shown during cluster switch) can render the profile's
+// DatabaseHistory alongside the free-form filter input. The free-form
+// input comes from the list's own filter buffer — we commit it directly
+// on Enter when it's non-empty so the user can type a brand-new name
+// without needing an explicit "manual entry" sentinel row.
+type databaseItem struct {
+	name string
+}
+
+func (i databaseItem) FilterValue() string { return i.name }
+func (i databaseItem) Title() string       { return i.name }
+func (i databaseItem) Description() string { return "from history" }
+
+// productionItem is a fixed 2-entry "Yes / No" list row for the
+// production-flag picker. The boolean value is the one that gets
+// persisted; the title and description carry the human-readable copy.
+type productionItem struct {
+	title       string
+	description string
+	value       bool
+}
+
+func (i productionItem) FilterValue() string { return i.title }
+func (i productionItem) Title() string       { return i.title }
+func (i productionItem) Description() string { return i.description }
 
 // languageOption is a fixed entry in the language picker. Code is the value
 // stored in state and embedded into the system prompt; Label is the human
@@ -2007,6 +2279,190 @@ func (m *Model) yankPayload() (string, string, error) {
 	return "", "", fmt.Errorf("nothing to copy")
 }
 
+// openSearch shows the "/" prompt so the user can type a query. The previous
+// committed query is pre-filled so pressing "/" + Enter repeats the last
+// search (vim muscle memory). Returns the cursor-blink command from the
+// textinput so the blinking caret starts immediately.
+func (m *Model) openSearch() tea.Cmd {
+	if m.result == nil {
+		// No results to search — surface the reason in the status line
+		// instead of silently swallowing the key. Schedule the
+		// auto-clear so the hint doesn't stick forever.
+		m.flashMessage = "nothing to search"
+		return m.scheduleFlashClear()
+	}
+	m.searchInput.SetValue(m.searchQuery)
+	m.searchInput.CursorEnd()
+	m.searchOpen = true
+	m.flashMessage = ""
+	return m.searchInput.Focus()
+}
+
+// cancelSearch closes the prompt without applying the in-progress input.
+// The previously committed query (if any) is left intact, so existing
+// highlights and n/N navigation still work after an Esc.
+func (m *Model) cancelSearch() {
+	m.searchOpen = false
+	m.searchInput.Blur()
+}
+
+// commitSearch captures the prompt value as the active query, recomputes
+// the table / JSON hit sets, and jumps to the first match in the current
+// view mode. Empty input clears the search entirely (behaves like Esc for
+// new searches but also wipes any previous query).
+//
+// Ordering note: alignSearchAnchors has to run *before* refreshTable because
+// refreshTable grows its column window around m.colCursor, and we need
+// that anchor pointing at the matched column first. focusSearchCursor then
+// runs *after* refreshTable because bubbles/table.SetRows (called inside
+// refreshTable) resets the row cursor as a side effect.
+func (m *Model) commitSearch() {
+	q := strings.TrimSpace(m.searchInput.Value())
+	m.searchOpen = false
+	m.searchInput.Blur()
+	if q == "" {
+		m.clearSearch()
+		return
+	}
+	m.searchQuery = q
+	m.runSearch()
+	m.searchCursor = 0
+	m.alignSearchAnchors()
+	m.refreshTable()
+	m.refreshJSON()
+	m.focusSearchCursor()
+	total := m.currentHitCount()
+	if total == 0 {
+		m.flashMessage = fmt.Sprintf("no matches for %q", q)
+	} else {
+		m.flashMessage = ""
+	}
+}
+
+// clearSearch resets every piece of search state so the views render without
+// highlights. Called from commitSearch("" ), executeMsg (new results), and
+// the explicit Esc-clear path.
+func (m *Model) clearSearch() {
+	m.searchQuery = ""
+	m.tableHits = nil
+	m.jsonHits = nil
+	m.searchCursor = 0
+	m.searchInput.SetValue("")
+	m.refreshTable()
+	m.refreshJSON()
+}
+
+// runSearch recomputes hits for both modes against the current result +
+// jsonRaw. The computation is mode-agnostic so a later Ctrl+J toggle can
+// reuse the pre-computed slice without re-scanning the data.
+func (m *Model) runSearch() {
+	m.tableHits = computeTableHits(m.result, m.searchQuery)
+	m.jsonHits = computeJSONHits(m.jsonRaw, m.searchQuery)
+}
+
+// currentHitCount returns the number of hits relevant to the active view.
+// Table mode counts tableHits; JSON mode counts jsonHits.
+func (m Model) currentHitCount() int {
+	if m.mode == viewJSON {
+		return len(m.jsonHits)
+	}
+	return len(m.tableHits)
+}
+
+// nextHit advances the cursor forward (delta=+1) or backward (delta=-1)
+// through the active mode's hit list, wrapping around at the boundaries
+// like vim's n/N. No-ops when no hits exist.
+//
+// Ordering: align → refresh → focus. See commitSearch for why alignment
+// must happen before the refresh and cursor focusing must happen after.
+func (m *Model) nextHit(delta int) {
+	total := m.currentHitCount()
+	if total == 0 {
+		return
+	}
+	m.searchCursor = ((m.searchCursor+delta)%total + total) % total
+	m.alignSearchAnchors()
+	m.refreshTable()
+	m.refreshJSON()
+	m.focusSearchCursor()
+}
+
+// currentTableHit / currentJSONHit return a pointer to the active hit for
+// the respective mode, or nil when the search is inactive or the cursor
+// is out of range. Used by the rendering helpers to decide which span to
+// paint with the "current" colour.
+func (m Model) currentTableHit() *tableHit {
+	if m.searchQuery == "" || len(m.tableHits) == 0 {
+		return nil
+	}
+	if m.searchCursor < 0 || m.searchCursor >= len(m.tableHits) {
+		return nil
+	}
+	hit := m.tableHits[m.searchCursor]
+	return &hit
+}
+
+func (m Model) currentJSONHit() *jsonHit {
+	if m.searchQuery == "" || len(m.jsonHits) == 0 {
+		return nil
+	}
+	if m.searchCursor < 0 || m.searchCursor >= len(m.jsonHits) {
+		return nil
+	}
+	hit := m.jsonHits[m.searchCursor]
+	return &hit
+}
+
+// alignSearchAnchors updates the pieces of view state that refreshTable /
+// refreshJSON consult when they rebuild their content, so that a subsequent
+// refresh lays out the right column window / highlights around the active
+// hit. Must run *before* the refresh helpers; focusSearchCursor then sets
+// the actual cursor position inside the freshly refreshed views.
+//
+// Concretely: refreshTable grows its column window around m.colCursor, so
+// we have to move that anchor first; otherwise the matched cell can be
+// completely outside the visible columns when the refresh runs.
+func (m *Model) alignSearchAnchors() {
+	if m.mode == viewJSON {
+		return
+	}
+	hit := m.currentTableHit()
+	if hit == nil {
+		return
+	}
+	if m.result != nil && hit.cell >= 0 && hit.cell < len(m.result.Columns) {
+		m.colCursor = hit.cell
+	}
+}
+
+// focusSearchCursor lands the actual cursor on the current hit after the
+// refresh helpers have rebuilt the views. Table mode uses the bubbles/table
+// row cursor (which scrolls the inner viewport automatically); JSON mode
+// sets the viewport YOffset so the matched line is roughly centred.
+//
+// Split from alignSearchAnchors because bubbles/table.SetRows — called by
+// refreshTable — resets the row cursor as a side effect, so the row cursor
+// must be applied *after* refresh.
+func (m *Model) focusSearchCursor() {
+	if m.mode == viewJSON {
+		hit := m.currentJSONHit()
+		if hit == nil {
+			return
+		}
+		target := hit.line - m.jsonView.Height/2
+		if target < 0 {
+			target = 0
+		}
+		m.jsonView.SetYOffset(target)
+		return
+	}
+	hit := m.currentTableHit()
+	if hit == nil {
+		return
+	}
+	m.table.SetCursor(hit.row)
+}
+
 // canExplainError reports whether the current error is something Bedrock can
 // usefully analyse. The empty-SQL sentinel is excluded because there is
 // nothing to explain, and the bedrock client must be configured. The
@@ -2097,6 +2553,29 @@ func (m *Model) focusAskInput() tea.Cmd {
 	m.askOpen = true
 	m.flashMessage = ""
 	return m.askInput.Focus()
+}
+
+// updateSearchInput handles keystrokes while the "/" search prompt is open.
+// Enter commits the query, Esc cancels without changing the previously
+// applied query. Every other key is forwarded to the textinput so typing,
+// backspace and cursor movement work as expected.
+func (m *Model) updateSearchInput(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc":
+		m.cancelSearch()
+		return nil
+	case "enter":
+		m.commitSearch()
+		// commitSearch may set a "no matches" flash that needs the
+		// auto-clear tick, same as every other transient message.
+		if m.flashMessage != "" {
+			return m.scheduleFlashClear()
+		}
+		return nil
+	}
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
+	return cmd
 }
 
 // updateAskInput handles input while the natural-language prompt is open.
@@ -2260,6 +2739,17 @@ func (m *Model) applyProfileSwitch(profile string, cfg aws.Config) tea.Cmd {
 	m.snapshot = nil
 	m.askChat = nil
 
+	// Hydrate the production flag from the new profile's state and
+	// re-run layout() so the banner line is accounted for in the
+	// editor/results heights. If the new profile has never been
+	// classified the picker opens automatically before any query can
+	// run.
+	answered := m.loadProductionFlag()
+	m.layout()
+	if !answered {
+		m.openProductionPrompt()
+	}
+
 	st, err := state.Load()
 	if err != nil {
 		m.flashMessage = "switched profile but state load failed: " + err.Error()
@@ -2337,7 +2827,7 @@ func (m *Model) updateClusterPicker(msg tea.KeyMsg) tea.Cmd {
 			m.clusterPickerOpen = false
 			if cached := m.lookupCachedSecret(item.cluster.ARN); cached != "" {
 				m.flashMessage = "switching to " + item.cluster.Identifier + "..."
-				return m.applyTargetSwitch(item.cluster, cached)
+				return m.beginTargetSwitch(item.cluster, cached)
 			}
 			m.pendingCluster = item.cluster
 			m.secretLoading = true
@@ -2378,8 +2868,8 @@ func (m Model) lookupCachedSecret(clusterARN string) string {
 }
 
 // updateSecretPicker handles input while the secret picker is open.
-// Confirming a secret completes the target switch (cluster + secret) and
-// triggers a schema refresh + history reload.
+// Confirming a secret starts the target switch (cluster + secret) which
+// chains into the database picker for final confirmation.
 func (m *Model) updateSecretPicker(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
@@ -2388,7 +2878,7 @@ func (m *Model) updateSecretPicker(msg tea.KeyMsg) tea.Cmd {
 			m.forceSecretPicker = false
 			cluster := m.pendingCluster
 			m.pendingCluster = connection.ClusterInfo{}
-			return m.applyTargetSwitch(cluster, item.secret.ARN)
+			return m.beginTargetSwitch(cluster, item.secret.ARN)
 		}
 		return nil
 	case "esc":
@@ -2402,26 +2892,237 @@ func (m *Model) updateSecretPicker(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// applyTargetSwitch swaps the active cluster + secret in the model, kicks
-// off a fresh schema fetch for the new cluster, and persists the change to
-// the per-profile state file. The database name is intentionally left as
-// it was — most users keep the same DB name across environments and a
-// surprise prompt mid-session would be jarring.
-func (m *Model) applyTargetSwitch(cluster connection.ClusterInfo, secretARN string) tea.Cmd {
+// openDatabasePicker loads the profile's database history into the
+// picker list and marks it open. The list items are the history entries
+// (most-recent first), and the picker's filter text doubles as a free
+// form entry field: the Enter handler commits a typed filter verbatim
+// when it is non-empty, so the user can type a brand-new database name
+// without having a matching history entry.
+func (m *Model) openDatabasePicker(cluster connection.ClusterInfo) tea.Cmd {
+	history := m.databaseHistory()
+	items := make([]list.Item, 0, len(history))
+	for _, name := range history {
+		if name == "" {
+			continue
+		}
+		items = append(items, databaseItem{name: name})
+	}
+	m.databaseList.SetItems(items)
+	m.databaseList.ResetFilter()
+	label := cluster.Identifier
+	if label == "" {
+		label = shortARN(cluster.ARN)
+	}
+	m.databaseList.Title = fmt.Sprintf(
+		"Database for %s (type new name or pick from history, Enter to confirm, Esc to cancel)",
+		label,
+	)
+	m.databasePickerOpen = true
+	m.flashMessage = ""
+	return nil
+}
+
+// databaseHistory pulls the database history slice off the profile state
+// file. Falls back to an empty slice on any error (missing file,
+// ephemeral mode with no profile name) so the picker still opens cleanly
+// and the user can type a fresh name.
+func (m Model) databaseHistory() []string {
+	if m.target.profile == "" {
+		return nil
+	}
+	st, err := state.Load()
+	if err != nil {
+		return nil
+	}
+	return st.Get(m.target.profile).DatabaseHistory
+}
+
+// openProductionPrompt shows the Yes/No picker that decides whether the
+// active profile is a production environment. Called automatically when
+// the state file has no stored value (first activation of a profile),
+// and on demand via the F7 keybinding so the user can toggle the flag
+// later. The initially-highlighted row reflects the current flag so a
+// simple Enter press preserves the existing setting on F7 reopens.
+func (m *Model) openProductionPrompt() {
+	if m.productionList.SelectedItem() != nil {
+		// Start the cursor on the row matching the current flag so F7
+		// reopens land on the user's previous answer. bubbles/list's
+		// Select(n int) sets the cursor without other side effects.
+		if m.isProduction {
+			m.productionList.Select(0)
+		} else {
+			m.productionList.Select(1)
+		}
+	}
+	m.productionPromptOpen = true
+	m.flashMessage = ""
+}
+
+// updateProductionPrompt handles input while the production prompt is
+// open. Enter persists the highlighted value to state and applies it
+// live; Esc closes the picker without persisting — which means the
+// next activation of this profile will re-ask, so the user cannot
+// accidentally bypass the confirmation on a fresh profile.
+//
+// Typed runes are intentionally not forwarded to the list filter: the
+// picker is non-filterable (2 fixed rows), so we handle up/down
+// directly and drop everything else instead of letting drivePicker
+// push junk into the filter buffer.
+func (m *Model) updateProductionPrompt(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		if item, ok := m.productionList.SelectedItem().(productionItem); ok {
+			m.isProduction = item.value
+			m.productionPromptOpen = false
+			// Toggling the flag changes the status bar height, so the
+			// editor / results heights need to be recomputed before
+			// the next render — without this the bottom line clips
+			// until the next terminal resize.
+			m.layout()
+			if err := m.persistIsProduction(item.value); err != nil {
+				log.Printf("save is_production failed: %v", err)
+			}
+			if item.value {
+				m.flashMessage = "⚠ PRODUCTION mode enabled"
+			} else {
+				m.flashMessage = "non-production mode"
+			}
+			return m.scheduleFlashClear()
+		}
+		return nil
+	case "esc":
+		m.productionPromptOpen = false
+		m.flashMessage = ""
+		return nil
+	}
+	switch msg.Type {
+	case tea.KeyUp:
+		m.productionList.CursorUp()
+	case tea.KeyDown:
+		m.productionList.CursorDown()
+	}
+	return nil
+}
+
+// persistIsProduction writes the IsProduction flag to the profile state
+// file. Ephemeral mode (empty profile name) is a no-op because direct
+// credentials sessions do not touch state at all.
+func (m *Model) persistIsProduction(value bool) error {
+	if m.target.profile == "" {
+		return nil
+	}
+	st, err := state.Load()
+	if err != nil {
+		return err
+	}
+	ps := st.Get(m.target.profile)
+	v := value
+	ps.IsProduction = &v
+	st.Set(m.target.profile, ps)
+	return st.Save()
+}
+
+// loadProductionFlag re-reads the IsProduction flag from the state file
+// and syncs it into the Model. Returns true if the flag had a stored
+// value; callers use that to decide whether to auto-open the prompt
+// (nil → prompt, non-nil → keep in sync with state and move on).
+func (m *Model) loadProductionFlag() bool {
+	m.isProduction = false
+	if m.target.profile == "" {
+		return true // ephemeral mode: treat as "already answered (false)"
+	}
+	st, err := state.Load()
+	if err != nil {
+		return false
+	}
+	ps := st.Get(m.target.profile)
+	if ps.IsProduction == nil {
+		return false
+	}
+	m.isProduction = *ps.IsProduction
+	return true
+}
+
+// updateDatabasePicker handles input while the database picker is open.
+// On Enter the typed filter text wins if it is non-empty (so "type a new
+// name, Enter" always works even when that name is not in the history);
+// otherwise the highlighted history item is committed. Esc reverts the
+// whole cluster switch by restoring the pre-switch cluster / secret, so
+// the user lands back exactly where they started before they pressed
+// Ctrl+T.
+func (m *Model) updateDatabasePicker(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		name := strings.TrimSpace(m.databaseList.FilterValue())
+		if name == "" {
+			// No typed filter — fall back to the highlighted history
+			// row (if any). If nothing is selected we cannot commit.
+			if item, ok := m.databaseList.SelectedItem().(databaseItem); ok {
+				name = item.name
+			}
+		}
+		if name == "" {
+			m.lastErr = fmt.Errorf("database name cannot be empty")
+			return nil
+		}
+		m.databasePickerOpen = false
+		return m.finalizeTargetSwitch(name)
+	case "esc":
+		m.target.cluster = m.pendingOldCluster
+		m.target.secret = m.pendingOldSecret
+		m.pendingOldCluster = ""
+		m.pendingOldSecret = ""
+		m.databasePickerOpen = false
+		m.flashMessage = "cluster switch cancelled"
+		return nil
+	}
+	drivePicker(&m.databaseList, msg)
+	return nil
+}
+
+// beginTargetSwitch is the first half of the cluster-switch flow. It
+// swaps cluster + secret onto m.target and then opens the database picker
+// so the user is always forced to confirm (or re-type) the target DB name
+// before any query runs against the new environment. The stale result /
+// schema clearing and the schema fetch are deferred to finalizeTargetSwitch
+// — the user may still Esc out of the database picker, in which case
+// nothing about the session changes.
+//
+// pendingOldCluster / pendingOldSecret snapshot the pre-switch values so
+// the Esc path in updateDatabasePicker can revert the target cleanly.
+func (m *Model) beginTargetSwitch(cluster connection.ClusterInfo, secretARN string) tea.Cmd {
+	m.pendingOldCluster = m.target.cluster
+	m.pendingOldSecret = m.target.secret
 	m.target.cluster = cluster.ARN
 	m.target.secret = secretARN
-	// Drop stale results from the previous cluster so the user is not
-	// fooled into thinking they still apply. The Ask AI chat history is
-	// also reset because the new cluster's schema is unrelated to the
-	// previous conversation.
+	m.lastErr = nil
+	m.flashMessage = ""
+	return m.openDatabasePicker(cluster)
+}
+
+// finalizeTargetSwitch is the second half of the cluster-switch flow,
+// triggered once the user confirms a database name in the picker. It
+// drops stale results / schema / ask-chat for the previous cluster,
+// persists the new target (cluster + secret + database) to the profile
+// state file, and kicks off a fresh schema fetch so the AI prompts have
+// up-to-date table / column context for the new database.
+func (m *Model) finalizeTargetSwitch(database string) tea.Cmd {
+	m.target.database = database
+	m.pendingOldCluster = ""
+	m.pendingOldSecret = ""
+	// Drop stale state from the previous cluster now that the switch
+	// is committed. Ask AI chat is also reset because the new cluster's
+	// schema is unrelated to the previous conversation.
 	m.result = nil
 	m.jsonText = ""
+	m.jsonRaw = ""
 	m.lastErr = nil
 	m.snapshot = nil
 	m.askChat = nil
-	m.flashMessage = "switched to " + cluster.Identifier
+	m.clearSearch()
+	m.flashMessage = "switched to " + shortARN(m.target.cluster) + " · " + database
 	if err := m.persistTarget(); err != nil {
-		log.Printf("save cluster/secret failed: %v", err)
+		log.Printf("save cluster/secret/database failed: %v", err)
 	}
 	return fetchSchemaCmd(m.client, m.target)
 }

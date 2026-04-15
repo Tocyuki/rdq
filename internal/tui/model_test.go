@@ -2,12 +2,14 @@ package tui
 
 import (
 	"errors"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/Tocyuki/rdq/internal/bedrock"
 	"github.com/Tocyuki/rdq/internal/connection"
+	"github.com/Tocyuki/rdq/internal/state"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -438,7 +440,9 @@ func TestAskChatRollbackOnError(t *testing.T) {
 
 // TestAskChatResetOnTargetSwitch verifies the chat is reset when the user
 // switches cluster, so the next Ask AI call does not carry context that no
-// longer matches the active schema.
+// longer matches the active schema. The clearing now happens during
+// finalizeTargetSwitch (after the database picker commit) rather than in
+// the earlier beginTargetSwitch, so the test drives the full switch.
 func TestAskChatResetOnTargetSwitch(t *testing.T) {
 	m := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
 	m.askChat = []bedrock.Message{
@@ -446,7 +450,8 @@ func TestAskChatResetOnTargetSwitch(t *testing.T) {
 		{Role: bedrock.RoleAssistant, Text: "old reply"},
 	}
 
-	m.applyTargetSwitch(connection.ClusterInfo{ARN: "arn:new", Identifier: "new"}, "arn:secret")
+	m.beginTargetSwitch(connection.ClusterInfo{ARN: "arn:new", Identifier: "new"}, "arn:secret")
+	m.finalizeTargetSwitch("mydb")
 
 	if len(m.askChat) != 0 {
 		t.Errorf("expected askChat to be cleared on target switch, got %+v", m.askChat)
@@ -1104,4 +1109,660 @@ func TestCanExplainError(t *testing.T) {
 			t.Error("canExplainError should be false while explainExecuting")
 		}
 	})
+}
+
+// searchResult returns a small result with predictable content so the
+// search tests can pick known needles that hit in specific rows / cells.
+// Columns: name, city. Rows:
+//
+//	alice  tokyo
+//	bob    osaka
+//	carol  tokyo    <- "tokyo" hits twice (rows 0 and 2)
+//	dave   sapporo
+func searchResult() *queryResult {
+	return &queryResult{
+		Columns: []string{"name", "city"},
+		Rows: [][]any{
+			{"alice", "tokyo"},
+			{"bob", "osaka"},
+			{"carol", "tokyo"},
+			{"dave", "sapporo"},
+		},
+	}
+}
+
+// TestComputeTableHits exercises the pure match computation directly so
+// we can assert positions without going through the full bubbletea loop.
+func TestComputeTableHits(t *testing.T) {
+	r := searchResult()
+
+	hits := computeTableHits(r, "tokyo")
+	if len(hits) != 2 {
+		t.Fatalf("expected 2 hits for tokyo, got %d: %+v", len(hits), hits)
+	}
+	if hits[0].row != 0 || hits[0].cell != 1 {
+		t.Errorf("hit[0] = %+v, want row=0 cell=1", hits[0])
+	}
+	if hits[1].row != 2 || hits[1].cell != 1 {
+		t.Errorf("hit[1] = %+v, want row=2 cell=1", hits[1])
+	}
+	if hits[0].length != len("tokyo") {
+		t.Errorf("hit length = %d, want %d", hits[0].length, len("tokyo"))
+	}
+
+	// Case-insensitive: "BOB" matches "bob".
+	if got := computeTableHits(r, "BOB"); len(got) != 1 || got[0].row != 1 {
+		t.Errorf("BOB hits = %+v, want 1 hit on row 1", got)
+	}
+
+	// Empty query / nil result → no hits.
+	if got := computeTableHits(r, ""); got != nil {
+		t.Errorf("empty query should yield nil, got %+v", got)
+	}
+	if got := computeTableHits(nil, "tokyo"); got != nil {
+		t.Errorf("nil result should yield nil, got %+v", got)
+	}
+}
+
+// TestComputeJSONHits verifies line-level matching against the plain
+// text used in refreshJSON's match branch.
+func TestComputeJSONHits(t *testing.T) {
+	raw := "[\n  {\n    \"name\": \"alice\",\n    \"city\": \"tokyo\"\n  },\n  {\n    \"name\": \"bob\",\n    \"city\": \"tokyo\"\n  }\n]"
+
+	hits := computeJSONHits(raw, "tokyo")
+	if len(hits) != 2 {
+		t.Fatalf("expected 2 json hits, got %d: %+v", len(hits), hits)
+	}
+	if hits[0].line == hits[1].line {
+		t.Errorf("hits should live on different lines, got %+v", hits)
+	}
+
+	if got := computeJSONHits("", "tokyo"); got != nil {
+		t.Errorf("empty raw should yield nil, got %+v", got)
+	}
+}
+
+// TestSearchOpenAndCommit drives the full "/" → type → Enter flow through
+// Update and asserts the search state is populated and the table cursor
+// jumped to the first match.
+func TestSearchOpenAndCommit(t *testing.T) {
+	m := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
+	m.width, m.height = 120, 40
+	m.layout()
+	m.result = searchResult()
+	m.jsonRaw = m.result.toJSON()
+	m.jsonText = m.jsonRaw
+	m.refreshTable()
+	m.refreshJSON()
+	m.focus = focusResults
+	m.editor.Blur()
+	m.table.Focus()
+
+	var model tea.Model = m
+	// "/" opens the prompt.
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	if !model.(Model).searchOpen {
+		t.Fatal("expected searchOpen after /")
+	}
+
+	// Type "tokyo" into the prompt.
+	for _, r := range "tokyo" {
+		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	// Enter commits.
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = model.(Model)
+
+	if m.searchOpen {
+		t.Error("searchOpen should be false after Enter")
+	}
+	if m.searchQuery != "tokyo" {
+		t.Errorf("searchQuery = %q, want tokyo", m.searchQuery)
+	}
+	if len(m.tableHits) != 2 {
+		t.Errorf("tableHits = %d, want 2", len(m.tableHits))
+	}
+	if m.table.Cursor() != 0 {
+		t.Errorf("table cursor = %d, want first hit row 0", m.table.Cursor())
+	}
+	if m.colCursor != 1 {
+		t.Errorf("colCursor = %d, want 1 (city column)", m.colCursor)
+	}
+}
+
+// TestSearchNextPrev confirms n/N cycle through the hit list with
+// wrap-around on both ends.
+func TestSearchNextPrev(t *testing.T) {
+	m := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
+	m.width, m.height = 120, 40
+	m.layout()
+	m.result = searchResult()
+	m.jsonRaw = m.result.toJSON()
+	m.jsonText = m.jsonRaw
+	m.refreshTable()
+	m.refreshJSON()
+	m.focus = focusResults
+	m.editor.Blur()
+	m.table.Focus()
+
+	// Set up a committed search directly (no textinput round trip).
+	m.searchQuery = "tokyo"
+	m.runSearch()
+	m.searchCursor = 0
+	m.alignSearchAnchors()
+	m.refreshTable()
+	m.refreshJSON()
+	m.focusSearchCursor()
+
+	var model tea.Model = m
+	// n: advance from 0 → 1.
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = model.(Model)
+	if m.searchCursor != 1 {
+		t.Errorf("after n, cursor = %d, want 1", m.searchCursor)
+	}
+	if m.table.Cursor() != 2 {
+		t.Errorf("after n, table cursor = %d, want 2", m.table.Cursor())
+	}
+
+	// n again: wrap 1 → 0.
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = model.(Model)
+	if m.searchCursor != 0 {
+		t.Errorf("after n wrap, cursor = %d, want 0", m.searchCursor)
+	}
+
+	// N: wrap 0 → 1 (going backwards).
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	m = model.(Model)
+	if m.searchCursor != 1 {
+		t.Errorf("after N wrap, cursor = %d, want 1", m.searchCursor)
+	}
+}
+
+// TestSearchEscCancelsInput verifies Esc while the prompt is open leaves
+// any previously committed query intact.
+func TestSearchEscCancelsInput(t *testing.T) {
+	m := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
+	m.width, m.height = 120, 40
+	m.layout()
+	m.result = searchResult()
+	m.jsonRaw = m.result.toJSON()
+	m.jsonText = m.jsonRaw
+	m.refreshTable()
+	m.focus = focusResults
+	m.editor.Blur()
+	m.table.Focus()
+
+	// Apply "tokyo" first so there is a committed query to preserve.
+	m.searchQuery = "tokyo"
+	m.runSearch()
+
+	// Open the prompt, type garbage, Esc → committed query unchanged.
+	var model tea.Model = m
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	for _, r := range "zzz" {
+		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = model.(Model)
+	if m.searchOpen {
+		t.Error("Esc should close the search prompt")
+	}
+	if m.searchQuery != "tokyo" {
+		t.Errorf("Esc should preserve committed query, got %q", m.searchQuery)
+	}
+	if len(m.tableHits) != 2 {
+		t.Errorf("hits should still be populated, got %d", len(m.tableHits))
+	}
+}
+
+// TestSearchExecuteMsgClears verifies a fresh SQL execution wipes the
+// search so stale hits never outlive the result they came from.
+func TestSearchExecuteMsgClears(t *testing.T) {
+	m := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
+	m.width, m.height = 120, 40
+	m.layout()
+	m.result = searchResult()
+	m.jsonRaw = m.result.toJSON()
+	m.jsonText = m.jsonRaw
+	m.refreshTable()
+	m.searchQuery = "tokyo"
+	m.runSearch()
+	if len(m.tableHits) == 0 {
+		t.Fatal("setup: expected hits to seed the test")
+	}
+
+	var model tea.Model = m
+	model, _ = model.Update(executeMsg{Result: makeResult(2, 2), SQL: "SELECT 1"})
+	m = model.(Model)
+	if m.searchQuery != "" {
+		t.Errorf("executeMsg should clear searchQuery, got %q", m.searchQuery)
+	}
+	if len(m.tableHits) != 0 {
+		t.Errorf("executeMsg should clear tableHits, got %d", len(m.tableHits))
+	}
+}
+
+// TestSearchViewToggleResetsCursor verifies Ctrl+J switches view mode and
+// resets the hit cursor to the first match in the new mode, so the
+// highlighted "current" hit belongs to whatever the user now sees.
+func TestSearchViewToggleResetsCursor(t *testing.T) {
+	m := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
+	m.width, m.height = 120, 40
+	m.layout()
+	m.result = searchResult()
+	m.jsonRaw = m.result.toJSON()
+	m.jsonText = m.jsonRaw
+	m.refreshTable()
+	m.refreshJSON()
+	m.focus = focusResults
+	m.editor.Blur()
+	m.table.Focus()
+	m.searchQuery = "tokyo"
+	m.runSearch()
+	m.searchCursor = 1 // advance past the first hit
+
+	var model tea.Model = m
+	// Ctrl+J toggles the view.
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = model.(Model)
+
+	if m.mode != viewJSON {
+		t.Errorf("mode = %v, want viewJSON", m.mode)
+	}
+	if m.searchCursor != 0 {
+		t.Errorf("searchCursor should reset to 0 on view toggle, got %d", m.searchCursor)
+	}
+	if m.currentHitCount() == 0 {
+		t.Errorf("expected JSON hits after toggle, got 0")
+	}
+}
+
+// TestSearchNoMatchesFlash verifies the user-facing feedback when a
+// committed query matches nothing — the flash message surfaces the miss
+// so the empty-looking table isn't mistaken for "search is broken".
+func TestSearchNoMatchesFlash(t *testing.T) {
+	m := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
+	m.width, m.height = 120, 40
+	m.layout()
+	m.result = searchResult()
+	m.jsonRaw = m.result.toJSON()
+	m.jsonText = m.jsonRaw
+	m.refreshTable()
+	m.focus = focusResults
+	m.editor.Blur()
+	m.table.Focus()
+
+	var model tea.Model = m
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	for _, r := range "zzz" {
+		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = model.(Model)
+
+	if len(m.tableHits) != 0 {
+		t.Errorf("tableHits = %d, want 0", len(m.tableHits))
+	}
+	if m.flashMessage == "" || !contains(m.flashMessage, "no matches") {
+		t.Errorf("flashMessage = %q, want contains 'no matches'", m.flashMessage)
+	}
+}
+
+// setupDatabaseTest builds a Model wired up for the database-picker tests:
+// a real target struct with a profile name, an isolated state file so
+// persistTarget() does not touch the developer's real ~/.rdq/state.json,
+// and layout() called so the picker has dimensions to render into.
+func setupDatabaseTest(t *testing.T) Model {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("RDQ_STATE_FILE", filepath.Join(dir, "state.json"))
+	m := newModel(nil, target{profile: "testprofile", database: "olddb"}, nil, nil, "", "", aws.Config{})
+	m.width, m.height = 120, 40
+	m.layout()
+	return m
+}
+
+// TestBeginTargetSwitchOpensDatabasePicker verifies that confirming a
+// cluster (via the cached-secret fast path) opens the database picker
+// rather than finalising the switch immediately. Schema fetch must be
+// deferred until the database is confirmed.
+func TestBeginTargetSwitchOpensDatabasePicker(t *testing.T) {
+	m := setupDatabaseTest(t)
+	// Seed the per-profile state with a cached cluster→secret pairing
+	// so the cluster picker takes the fast path and we can observe the
+	// handoff to the database picker without running AWS SDK calls.
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	ps := st.Get("testprofile")
+	ps.ClusterSecrets = map[string]string{"arn:new-cluster": "arn:new-secret"}
+	st.Set("testprofile", ps)
+	if err := st.Save(); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	cluster := connection.ClusterInfo{ARN: "arn:new-cluster", Identifier: "new-cluster"}
+	cmd := m.beginTargetSwitch(cluster, "arn:new-secret")
+	// beginTargetSwitch returns the picker-open cmd (which is nil in
+	// this implementation) — the important thing is that schema fetch
+	// has NOT been kicked off yet.
+	_ = cmd
+
+	if !m.databasePickerOpen {
+		t.Fatal("expected databasePickerOpen after beginTargetSwitch")
+	}
+	if m.target.cluster != "arn:new-cluster" {
+		t.Errorf("target.cluster = %q, want arn:new-cluster", m.target.cluster)
+	}
+	if m.target.secret != "arn:new-secret" {
+		t.Errorf("target.secret = %q, want arn:new-secret", m.target.secret)
+	}
+	if m.target.database != "olddb" {
+		t.Errorf("target.database should stay as olddb until the picker commits, got %q", m.target.database)
+	}
+	if m.snapshot != nil {
+		t.Error("schema snapshot should not be cleared yet — user may still Esc")
+	}
+}
+
+// TestDatabasePickerEnterCommitsTypedName exercises the typed-filter
+// commit path: no history, user types a fresh database name, Enter
+// applies it to m.target.database.
+func TestDatabasePickerEnterCommitsTypedName(t *testing.T) {
+	m := setupDatabaseTest(t)
+	cluster := connection.ClusterInfo{ARN: "arn:new", Identifier: "new"}
+	m.beginTargetSwitch(cluster, "arn:secret")
+
+	// Type a new database name into the picker filter.
+	applyPickerFilter(&m.databaseList, "staging_db")
+	cmd := m.updateDatabasePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	// The returned cmd is the schema fetch for the new target — we
+	// don't execute it, just confirm it was produced.
+	if cmd == nil {
+		t.Error("updateDatabasePicker Enter should return a schema-fetch cmd")
+	}
+	if m.databasePickerOpen {
+		t.Error("picker should close after Enter")
+	}
+	if m.target.database != "staging_db" {
+		t.Errorf("target.database = %q, want staging_db", m.target.database)
+	}
+}
+
+// TestDatabasePickerEnterCommitsHistorySelection verifies that when the
+// filter is empty and a history row is highlighted, Enter commits the
+// highlighted row's database name.
+func TestDatabasePickerEnterCommitsHistorySelection(t *testing.T) {
+	m := setupDatabaseTest(t)
+	// Seed a DatabaseHistory for the profile so openDatabasePicker
+	// populates the list with real rows.
+	st, _ := state.Load()
+	ps := st.Get("testprofile")
+	ps.DatabaseHistory = []string{"proddb", "stagingdb", "devdb"}
+	st.Set("testprofile", ps)
+	_ = st.Save()
+
+	cluster := connection.ClusterInfo{ARN: "arn:new", Identifier: "new"}
+	m.beginTargetSwitch(cluster, "arn:secret")
+
+	if count := len(m.databaseList.Items()); count != 3 {
+		t.Fatalf("expected 3 history items in picker, got %d", count)
+	}
+	// No filter → the first row (proddb) is selected by default.
+	cmd := m.updateDatabasePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Error("Enter should return a schema-fetch cmd")
+	}
+	if m.target.database != "proddb" {
+		t.Errorf("target.database = %q, want proddb", m.target.database)
+	}
+}
+
+// TestDatabasePickerEscRevertsSwitch confirms the Esc path: the
+// pre-switch cluster and secret are restored and the database stays
+// unchanged, so the user lands back exactly where they started before
+// pressing Ctrl+T.
+func TestDatabasePickerEscRevertsSwitch(t *testing.T) {
+	m := setupDatabaseTest(t)
+	m.target.cluster = "arn:old-cluster"
+	m.target.secret = "arn:old-secret"
+
+	cluster := connection.ClusterInfo{ARN: "arn:new", Identifier: "new"}
+	m.beginTargetSwitch(cluster, "arn:new-secret")
+
+	if m.target.cluster != "arn:new" {
+		t.Fatalf("setup sanity: target.cluster = %q, want arn:new after begin", m.target.cluster)
+	}
+
+	cmd := m.updateDatabasePicker(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Errorf("Esc path should return nil cmd, got %v", cmd)
+	}
+	if m.databasePickerOpen {
+		t.Error("picker should close after Esc")
+	}
+	if m.target.cluster != "arn:old-cluster" {
+		t.Errorf("target.cluster should revert to old, got %q", m.target.cluster)
+	}
+	if m.target.secret != "arn:old-secret" {
+		t.Errorf("target.secret should revert to old, got %q", m.target.secret)
+	}
+	if m.target.database != "olddb" {
+		t.Errorf("target.database should stay as olddb, got %q", m.target.database)
+	}
+	if m.flashMessage == "" || !strings.Contains(m.flashMessage, "cancel") {
+		t.Errorf("flashMessage should mention cancel, got %q", m.flashMessage)
+	}
+}
+
+// TestDatabasePickerEmptyInputRejected verifies an empty commit is
+// bounced back as an error without closing the picker: the user is
+// forced to actually enter something.
+func TestDatabasePickerEmptyInputRejected(t *testing.T) {
+	m := setupDatabaseTest(t)
+	// No history, no filter: Enter on a completely empty picker.
+	cluster := connection.ClusterInfo{ARN: "arn:new", Identifier: "new"}
+	m.beginTargetSwitch(cluster, "arn:secret")
+
+	cmd := m.updateDatabasePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Errorf("empty Enter should return nil cmd, got %v", cmd)
+	}
+	if !m.databasePickerOpen {
+		t.Error("picker should stay open on empty commit")
+	}
+	if m.lastErr == nil {
+		t.Error("expected lastErr to be set on empty commit")
+	}
+	if m.target.database != "olddb" {
+		t.Errorf("target.database should stay as olddb, got %q", m.target.database)
+	}
+}
+
+// TestFinalizeTargetSwitchPersistsHistory locks in that committing a
+// database name pushes it to the front of DatabaseHistory in the state
+// file, so the picker will surface it first on the next cluster switch.
+func TestFinalizeTargetSwitchPersistsHistory(t *testing.T) {
+	m := setupDatabaseTest(t)
+	m.target.cluster = "arn:cluster"
+	m.target.secret = "arn:secret"
+
+	_ = m.finalizeTargetSwitch("newdb")
+
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	ps := st.Get("testprofile")
+	if ps.Database != "newdb" {
+		t.Errorf("persisted Database = %q, want newdb", ps.Database)
+	}
+	if len(ps.DatabaseHistory) == 0 || ps.DatabaseHistory[0] != "newdb" {
+		t.Errorf("DatabaseHistory[0] = %v, want newdb first", ps.DatabaseHistory)
+	}
+}
+
+// setupProductionTest is the production-flag counterpart of
+// setupDatabaseTest: isolated state file + a non-empty profile so
+// loadProductionFlag actually consults the state backend. The
+// returned Model has layout() called so renderStatus / layout
+// assertions work.
+func setupProductionTest(t *testing.T) Model {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("RDQ_STATE_FILE", filepath.Join(dir, "state.json"))
+	m := newModel(nil, target{profile: "testprofile"}, nil, nil, "", "", aws.Config{})
+	m.width, m.height = 120, 40
+	m.layout()
+	return m
+}
+
+// TestNewModelOpensProductionPromptWhenFlagUnset verifies the first
+// activation of a profile auto-opens the production picker, so the
+// user cannot run queries before classifying the environment.
+func TestNewModelOpensProductionPromptWhenFlagUnset(t *testing.T) {
+	m := setupProductionTest(t)
+	if !m.productionPromptOpen {
+		t.Error("expected productionPromptOpen to be true on fresh profile")
+	}
+	if m.isProduction {
+		t.Error("isProduction should default to false before user answers")
+	}
+}
+
+// TestNewModelSkipsPromptWhenFlagAlreadySet verifies a profile with a
+// stored IsProduction value skips the auto-prompt and hydrates the
+// flag into the Model.
+func TestNewModelSkipsPromptWhenFlagAlreadySet(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RDQ_STATE_FILE", filepath.Join(dir, "state.json"))
+
+	// Seed the state file with IsProduction=true so newModel should
+	// read and honor it without opening the prompt.
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("state load: %v", err)
+	}
+	ps := st.Get("testprofile")
+	prod := true
+	ps.IsProduction = &prod
+	st.Set("testprofile", ps)
+	if err := st.Save(); err != nil {
+		t.Fatalf("state save: %v", err)
+	}
+
+	m := newModel(nil, target{profile: "testprofile"}, nil, nil, "", "", aws.Config{})
+	if m.productionPromptOpen {
+		t.Error("expected prompt to stay closed when flag is already set")
+	}
+	if !m.isProduction {
+		t.Error("isProduction should hydrate to true from state")
+	}
+}
+
+// TestProductionPromptEnterYesPersists walks the Yes path end-to-end:
+// highlight row 0 (Yes), press Enter, verify isProduction + flash +
+// state file are all updated.
+func TestProductionPromptEnterYesPersists(t *testing.T) {
+	m := setupProductionTest(t)
+	// Highlight "Yes" (row 0) explicitly so the assertion is stable
+	// regardless of whichever row openProductionPrompt selected.
+	m.productionList.Select(0)
+
+	cmd := m.updateProductionPrompt(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Error("expected a flash-clear cmd from Enter")
+	}
+	if m.productionPromptOpen {
+		t.Error("prompt should close after Enter")
+	}
+	if !m.isProduction {
+		t.Error("isProduction should be true after Enter on Yes row")
+	}
+	if !strings.Contains(m.flashMessage, "PRODUCTION") {
+		t.Errorf("flashMessage = %q, want to mention PRODUCTION", m.flashMessage)
+	}
+
+	// Verify persistence survived the call.
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("state load: %v", err)
+	}
+	ps := st.Get("testprofile")
+	if ps.IsProduction == nil || !*ps.IsProduction {
+		t.Errorf("persisted IsProduction = %v, want *true", ps.IsProduction)
+	}
+}
+
+// TestProductionPromptEscKeepsFlagNil verifies Esc does NOT persist
+// anything — so a fresh profile that was Esc'd out will re-prompt on
+// the next activation rather than silently defaulting to "non-prod".
+func TestProductionPromptEscKeepsFlagNil(t *testing.T) {
+	m := setupProductionTest(t)
+
+	_ = m.updateProductionPrompt(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.productionPromptOpen {
+		t.Error("prompt should close after Esc")
+	}
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("state load: %v", err)
+	}
+	ps := st.Get("testprofile")
+	if ps.IsProduction != nil {
+		t.Errorf("IsProduction should stay nil after Esc, got %v", *ps.IsProduction)
+	}
+}
+
+// TestF7ReopensProductionPrompt confirms the F7 keybinding can reopen
+// the picker any time for a profile that already has a stored value,
+// so the user can change their mind later without editing state.json.
+func TestF7ReopensProductionPrompt(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RDQ_STATE_FILE", filepath.Join(dir, "state.json"))
+	st, _ := state.Load()
+	ps := st.Get("testprofile")
+	no := false
+	ps.IsProduction = &no
+	st.Set("testprofile", ps)
+	_ = st.Save()
+
+	m := newModel(nil, target{profile: "testprofile"}, nil, nil, "", "", aws.Config{})
+	if m.productionPromptOpen {
+		t.Fatal("setup: prompt should be closed initially")
+	}
+
+	var model tea.Model = m
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyF7})
+	m = model.(Model)
+
+	if !m.productionPromptOpen {
+		t.Error("F7 should reopen the production prompt")
+	}
+}
+
+// TestProductionBannerInRenderStatus verifies the ⚠ PRODUCTION ⚠
+// banner actually appears in the rendered status bar when the flag is
+// active, and is absent otherwise. This is the regression for the
+// "warning feel" guarantee.
+func TestProductionBannerInRenderStatus(t *testing.T) {
+	m := setupProductionTest(t)
+	m.productionPromptOpen = false
+
+	m.isProduction = true
+	out := m.renderStatus()
+	if !strings.Contains(out, "PRODUCTION") {
+		t.Errorf("production banner missing from renderStatus:\n%s", out)
+	}
+
+	m.isProduction = false
+	out = m.renderStatus()
+	if strings.Contains(out, "PRODUCTION") {
+		t.Errorf("PRODUCTION should not appear when flag is false:\n%s", out)
+	}
 }
