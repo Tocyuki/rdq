@@ -35,16 +35,10 @@ jobs:
           git diff --exit-code -- go.mod go.sum
 
       - name: Check formatting (gofmt)
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "::error::The following files are not gofmt-formatted:"
-            echo "$unformatted"
-            exit 1
-          fi
+        run: make fmt-check
 
       - name: Vet
-        run: go vet ./...
+        run: make vet
 
       - name: Test
         run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...

@@ -273,12 +273,20 @@ Inside the TUI, `^P` opens the profile picker again at any time. Switching to a 
 ```bash
 git clone https://github.com/Tocyuki/rdq.git
 cd rdq
+make hooks            # one-time: install the pre-commit gofmt guard
 make go-build         # Go-only build
 ./rdq --help
 
-go test ./...         # Run unit tests
-go vet ./...
+make fmt              # gofmt -w .
+make check            # fmt-check + vet + test -race (mirrors CI)
 ```
+
+`make check` is the exact set of steps the CI "Go" job runs, so a
+green `make check` locally means a green CI. The `make hooks` target
+installs a tiny pre-commit hook (`.githooks/pre-commit`) that runs
+`gofmt -l` on any staged Go files — it catches the most common "red
+CI" mistake before the commit lands without slowing down
+`git commit` with test runs.
 
 For the GUI mode (browser SPA), `make build` runs the Vite frontend build and embeds it into the Go binary. See `CLAUDE.md` for the layered architecture overview.
 

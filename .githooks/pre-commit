@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Pre-commit hook for rdq. Runs the fast checks that catch the most
+# common "red CI" mistakes before a commit lands — currently just
+# gofmt, because it's O(ms) and is the only thing that broke CI in
+# the past. Vet + test are intentionally left out: they take seconds
+# to minutes, which adds too much friction to `git commit`. Run
+# `make check` manually (or let CI do it) for the full sweep.
+#
+# Enable this hook once per clone:
+#
+#     make hooks
+#
+# or equivalently:
+#
+#     git config core.hooksPath .githooks
+#
+set -euo pipefail
+
+# Only scan files that are actually staged for this commit. That
+# keeps the hook quiet when you're committing a docs-only change and
+# have unrelated unformatted files sitting in your working tree.
+staged_go=$(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+if [ -z "$staged_go" ]; then
+	exit 0
+fi
+
+# gofmt -l prints each path that *would* be rewritten. An empty
+# output means every staged Go file is already canonical.
+unformatted=$(gofmt -l $staged_go)
+if [ -n "$unformatted" ]; then
+	echo "pre-commit: the following staged Go files are not gofmt-formatted:"
+	echo "$unformatted" | sed 's/^/  /'
+	echo
+	echo "Run 'make fmt' to fix, then 'git add' the changes and retry."
+	exit 1
+fi
