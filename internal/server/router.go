@@ -39,6 +39,13 @@ func buildRouter(deps handlerDeps) http.Handler {
 	mux.HandleFunc("GET /api/history", hist.list)
 	mux.HandleFunc("POST /api/history/favorite", hist.favorite)
 
+	ai := newAIHandlers(deps.awsCache)
+	mux.HandleFunc("GET /api/ai/models", ai.models)
+	mux.HandleFunc("POST /api/ai/ask", ai.ask)
+	mux.HandleFunc("POST /api/ai/explain", ai.explain)
+	mux.HandleFunc("POST /api/ai/review", ai.review)
+	mux.HandleFunc("POST /api/ai/analyze", ai.analyze)
+
 	// SPA static + fallback handler. Mounted on the root so it catches
 	// everything the API router did not.
 	mux.Handle("/", spaHandler(deps.distFS))

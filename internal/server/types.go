@@ -135,6 +135,80 @@ type FavoriteRequest struct {
 	Favorite bool   `json:"favorite"`
 }
 
+// ModelInfoDTO is a single Bedrock model / inference profile entry.
+type ModelInfoDTO struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// ModelsDTO wraps the /api/ai/models list.
+type ModelsDTO struct {
+	Models []ModelInfoDTO `json:"models"`
+}
+
+// MessageDTO is one turn in a multi-turn conversation sent to /api/ai/ask.
+// Role is "user" or "assistant".
+type MessageDTO struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
+// aiRequestBase is embedded in every AI endpoint request so the fields
+// common to all of them (connection coordinates, model, language) only
+// have to be documented once.
+type aiRequestBase struct {
+	Profile  string `json:"profile"`
+	Cluster  string `json:"cluster"`
+	Database string `json:"database"`
+	ModelID  string `json:"modelId"`
+	Language string `json:"language"`
+}
+
+// AskRequest is the JSON body of POST /api/ai/ask. Messages is the full
+// multi-turn history (SPA-managed); the server does not keep conversation
+// state.
+type AskRequest struct {
+	aiRequestBase
+	Messages []MessageDTO `json:"messages"`
+}
+
+// AskResponse is the JSON body of POST /api/ai/ask. The SQL has already
+// been stripped of Markdown code fences by bedrock.Ask.
+type AskResponse struct {
+	SQL string `json:"sql"`
+}
+
+// ExplainRequest is the JSON body of POST /api/ai/explain.
+type ExplainRequest struct {
+	aiRequestBase
+	SQL      string `json:"sql"`
+	ErrorMsg string `json:"errorMsg"`
+}
+
+// ReviewRequest is the JSON body of POST /api/ai/review.
+type ReviewRequest struct {
+	aiRequestBase
+	SQL   string `json:"sql"`
+	Focus string `json:"focus,omitempty"`
+}
+
+// AnalyzeRequest is the JSON body of POST /api/ai/analyze. ResultBlob is a
+// CSV rendering of the last result produced by the SPA — we send it verbatim
+// rather than re-running the query.
+type AnalyzeRequest struct {
+	aiRequestBase
+	SQL        string `json:"sql"`
+	ResultBlob string `json:"resultBlob"`
+	Focus      string `json:"focus,omitempty"`
+}
+
+// TextResponse is the JSON body returned by /api/ai/explain, /api/ai/review,
+// and /api/ai/analyze. The text is raw Markdown from Bedrock.
+type TextResponse struct {
+	Text string `json:"text"`
+}
+
 // ErrorDTO is the uniform shape for error responses. Code is a short, stable
 // string enum for programmatic handling; Message is free-form text for
 // display.
