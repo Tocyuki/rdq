@@ -9,6 +9,7 @@ import (
 
 	"github.com/Tocyuki/rdq/internal/bedrock"
 	"github.com/Tocyuki/rdq/internal/connection"
+	"github.com/Tocyuki/rdq/internal/runner"
 	"github.com/Tocyuki/rdq/internal/state"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/charmbracelet/bubbles/list"
@@ -346,7 +347,7 @@ func TestYankInspectorViaKeystrokes(t *testing.T) {
 	m.width, m.height = 100, 40
 	m.layout()
 	m.result = makeResult(2, 3)
-	m.jsonText = m.result.toJSON()
+	m.jsonText = m.result.ToJSON()
 	m.refreshTable()
 	m.focus = focusResults
 	m.table.Focus()
@@ -945,7 +946,7 @@ func TestTabIsBlockedWhileInspecting(t *testing.T) {
 func TestYankPayloadByContext(t *testing.T) {
 	m := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
 	m.result = makeResult(2, 3)
-	m.jsonText = m.result.toJSON()
+	m.jsonText = m.result.ToJSON()
 
 	// Table view (default mode after a successful execution).
 	m.mode = viewTable
@@ -1075,7 +1076,7 @@ func TestCanExplainError(t *testing.T) {
 	}{
 		{"no client", nil, errors.New("syntax"), false},
 		{"no error", bd, nil, false},
-		{"empty sql sentinel", bd, errEmptySQLValue{}, false},
+		{"empty sql sentinel", bd, runner.ErrEmptySQL, false},
 		{"real error", bd, errors.New("table not found"), true},
 	}
 	for _, tc := range cases {
@@ -1190,7 +1191,7 @@ func TestSearchOpenAndCommit(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.refreshJSON()
@@ -1238,7 +1239,7 @@ func TestSearchNextPrev(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.refreshJSON()
@@ -1288,7 +1289,7 @@ func TestSearchEscCancelsInput(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.focus = focusResults
@@ -1325,7 +1326,7 @@ func TestSearchExecuteMsgClears(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.searchQuery = "tokyo"
@@ -1353,7 +1354,7 @@ func TestSearchViewToggleResetsCursor(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.refreshJSON()
@@ -1388,7 +1389,7 @@ func TestSearchNoMatchesFlash(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.focus = focusResults

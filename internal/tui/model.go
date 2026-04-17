@@ -10,6 +10,7 @@ import (
 	"github.com/Tocyuki/rdq/internal/bedrock"
 	"github.com/Tocyuki/rdq/internal/connection"
 	"github.com/Tocyuki/rdq/internal/history"
+	"github.com/Tocyuki/rdq/internal/runner"
 	"github.com/Tocyuki/rdq/internal/schema"
 	"github.com/Tocyuki/rdq/internal/state"
 	"github.com/atotto/clipboard"
@@ -282,7 +283,7 @@ func (i historyItem) Description() string {
 // fits on one line in the picker.
 func summarizeSQL(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
-	return truncate(s, 80)
+	return runner.Truncate(s, 80)
 }
 
 // newModel constructs an initialized Model. It does not perform any I/O; the
@@ -501,7 +502,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.lastErr = nil
 			m.result = msg.Result
-			m.jsonRaw = msg.Result.toJSON()
+			m.jsonRaw = msg.Result.ToJSON()
 			m.jsonText = m.jsonRaw
 			m.colCursor = 0
 			// clearSearch wipes any previous query + hit state and
@@ -853,7 +854,7 @@ func (m *Model) openInspector(idx int) {
 	if m.result == nil || idx < 0 || idx >= len(m.result.Rows) {
 		return
 	}
-	out, err := m.result.rowJSON(idx)
+	out, err := m.result.RowJSON(idx)
 	if err != nil {
 		m.lastErr = fmt.Errorf("inspect row: %w", err)
 		return
@@ -891,7 +892,7 @@ func (m *Model) handleExportCSV() {
 		m.flashMessage = ""
 		return
 	}
-	path, err := m.result.exportCSV()
+	path, err := m.result.ExportCSV()
 	if err != nil {
 		m.lastErr = fmt.Errorf("export failed: %w", err)
 		m.flashMessage = ""
@@ -1374,7 +1375,7 @@ func (m *Model) refreshTable() {
 		row := make(table.Row, len(visible))
 		for j := range visible {
 			absoluteCol := start + j
-			w := columnWidthCap
+			w := runner.ColumnWidthCap
 			if absoluteCol < len(widths) {
 				w = widths[absoluteCol]
 			}
@@ -1382,7 +1383,7 @@ func (m *Model) refreshTable() {
 			if absoluteCol < len(r) {
 				cell = r[absoluteCol]
 			}
-			shown := truncate(formatCell(cell), w)
+			shown := runner.Truncate(runner.FormatCell(cell), w)
 			if m.searchQuery != "" {
 				shown = highlightCell(shown, m.searchQuery, curHit, i, absoluteCol)
 			}
@@ -2067,7 +2068,7 @@ func (m *Model) openAnalyzePrompt() tea.Cmd {
 		return nil
 	}
 	var sb strings.Builder
-	if err := m.result.writeCSV(&sb); err != nil {
+	if err := m.result.WriteCSV(&sb); err != nil {
 		m.lastErr = fmt.Errorf("encode result for analysis: %w", err)
 		return nil
 	}
@@ -2260,7 +2261,7 @@ func (m *Model) yankPayload() (string, string, error) {
 		if m.result == nil {
 			return "", "", fmt.Errorf("nothing to copy")
 		}
-		row, err := m.result.rowJSON(m.inspectedRow)
+		row, err := m.result.RowJSON(m.inspectedRow)
 		if err != nil {
 			return "", "", fmt.Errorf("copy row: %w", err)
 		}
@@ -2269,7 +2270,7 @@ func (m *Model) yankPayload() (string, string, error) {
 		return m.jsonText, "result JSON", nil
 	case m.result != nil:
 		var sb strings.Builder
-		if err := m.result.writeCSV(&sb); err != nil {
+		if err := m.result.WriteCSV(&sb); err != nil {
 			return "", "", fmt.Errorf("copy table: %w", err)
 		}
 		return sb.String(), "result CSV", nil
@@ -2472,7 +2473,7 @@ func (m Model) canExplainError() bool {
 	if m.lastErr == nil || m.bedrockClient == nil {
 		return false
 	}
-	if _, ok := m.lastErr.(errEmptySQLValue); ok {
+	if errors.Is(m.lastErr, runner.ErrEmptySQL) {
 		return false
 	}
 	if m.explainExecuting {
