@@ -83,6 +83,58 @@ type ExecuteResponse struct {
 	DurationMS int64    `json:"durationMs"`
 }
 
+// SchemaColumnDTO is one row from information_schema.columns.
+type SchemaColumnDTO struct {
+	Schema string `json:"schema"`
+	Table  string `json:"table"`
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+}
+
+// SchemaDTO is the JSON body of /api/schema. FromCache=true means the
+// snapshot was served from the on-disk cache without an AWS round trip.
+type SchemaDTO struct {
+	Cluster   string            `json:"cluster"`
+	Database  string            `json:"database"`
+	FetchedAt string            `json:"fetchedAt"`
+	Columns   []SchemaColumnDTO `json:"columns"`
+	FromCache bool              `json:"fromCache"`
+}
+
+// SchemaRefreshRequest is the JSON body of POST /api/schema/refresh.
+type SchemaRefreshRequest struct {
+	Profile  string `json:"profile"`
+	Cluster  string `json:"cluster"`
+	Secret   string `json:"secret"`
+	Database string `json:"database"`
+}
+
+// HistoryEntryDTO is the JSON shape of a /api/history entry. Times are
+// rendered as RFC3339Nano strings so the SPA can round-trip them through
+// POST /api/history/favorite.
+type HistoryEntryDTO struct {
+	Profile    string `json:"profile"`
+	Database   string `json:"database"`
+	SQL        string `json:"sql"`
+	At         string `json:"at"`
+	Ok         bool   `json:"ok"`
+	DurationMS int64  `json:"durationMs"`
+	Error      string `json:"error,omitempty"`
+	Favorite   bool   `json:"favorite,omitempty"`
+}
+
+// HistoryDTO wraps the /api/history list (most recent first).
+type HistoryDTO struct {
+	Entries []HistoryEntryDTO `json:"entries"`
+}
+
+// FavoriteRequest is the JSON body of POST /api/history/favorite. At
+// identifies the entry (history is keyed by execution timestamp).
+type FavoriteRequest struct {
+	At       string `json:"at"`
+	Favorite bool   `json:"favorite"`
+}
+
 // ErrorDTO is the uniform shape for error responses. Code is a short, stable
 // string enum for programmatic handling; Message is free-form text for
 // display.

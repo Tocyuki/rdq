@@ -31,6 +31,14 @@ func buildRouter(deps handlerDeps) http.Handler {
 	exec := newExecuteHandlers(deps.awsCache, deps.history)
 	mux.HandleFunc("POST /api/execute", exec.execute)
 
+	sch := newSchemaHandlers(deps.awsCache)
+	mux.HandleFunc("GET /api/schema", sch.get)
+	mux.HandleFunc("POST /api/schema/refresh", sch.refresh)
+
+	hist := newHistoryHandlers(deps.history)
+	mux.HandleFunc("GET /api/history", hist.list)
+	mux.HandleFunc("POST /api/history/favorite", hist.favorite)
+
 	// SPA static + fallback handler. Mounted on the root so it catches
 	// everything the API router did not.
 	mux.Handle("/", spaHandler(deps.distFS))
