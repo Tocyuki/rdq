@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"runtime"
 	"time"
+
+	"github.com/Tocyuki/rdq/internal/history"
 )
 
 // Options configures a `rdq gui` run. Values are propagated from command-line
@@ -61,9 +63,19 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	seed = LoadFromState(seed)
 
+	// History is best-effort — a broken file should not stop the server
+	// from booting. Failure is logged and the SPA simply gets an empty
+	// history list.
+	hist, err := history.New()
+	if err != nil {
+		log.Printf("rdq gui: history disabled: %v", err)
+		hist = nil
+	}
+
 	deps := handlerDeps{
 		session:        newSessionStore(seed),
 		awsCache:       newAWSCache(),
+		history:        hist,
 		distFS:         distFS,
 		allowedOrigins: allowedOrigins(opts.Port, opts.Dev),
 	}

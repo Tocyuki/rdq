@@ -62,6 +62,27 @@ type DatabasesDTO struct {
 	History []string `json:"history"`
 }
 
+// ExecuteRequest is the JSON body of POST /api/execute. All four connection
+// fields are required because the server is stateless — it does not assume
+// the session store has the right values at the moment the request arrives.
+type ExecuteRequest struct {
+	Profile  string `json:"profile"`
+	Cluster  string `json:"cluster"`
+	Secret   string `json:"secret"`
+	Database string `json:"database"`
+	SQL      string `json:"sql"`
+}
+
+// ExecuteResponse is the JSON body returned by POST /api/execute. Rows is a
+// [][]any so SELECT output preserves native Go types (int64/float64/bool/
+// []byte-as-base64/null) through JSON marshaling.
+type ExecuteResponse struct {
+	Columns    []string `json:"columns"`
+	Rows       [][]any  `json:"rows"`
+	Updated    int64    `json:"updated"`
+	DurationMS int64    `json:"durationMs"`
+}
+
 // ErrorDTO is the uniform shape for error responses. Code is a short, stable
 // string enum for programmatic handling; Message is free-form text for
 // display.

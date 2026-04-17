@@ -4,6 +4,8 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+
+	"github.com/Tocyuki/rdq/internal/history"
 )
 
 // buildRouter wires the API routes under /api/, then serves the SPA from the
@@ -26,6 +28,9 @@ func buildRouter(deps handlerDeps) http.Handler {
 	mux.HandleFunc("GET /api/secrets", conn.secrets)
 	mux.HandleFunc("GET /api/databases", conn.databases)
 
+	exec := newExecuteHandlers(deps.awsCache, deps.history)
+	mux.HandleFunc("POST /api/execute", exec.execute)
+
 	// SPA static + fallback handler. Mounted on the root so it catches
 	// everything the API router did not.
 	mux.Handle("/", spaHandler(deps.distFS))
@@ -40,6 +45,7 @@ func buildRouter(deps handlerDeps) http.Handler {
 type handlerDeps struct {
 	session        *sessionStore
 	awsCache       *awsCache
+	history        *history.Store
 	distFS         fs.FS
 	allowedOrigins []string
 }
