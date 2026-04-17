@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { forwardRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { Badge, type BadgeProps } from '@/components/ui/badge'
@@ -22,26 +22,33 @@ import { cn } from '@/lib/utils'
  * hover ring telling the user it is interactive.
  */
 
-interface BadgeTriggerProps {
+interface BadgeTriggerProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   label: string
   variant?: BadgeProps['variant']
-  title?: string
-  className?: string
 }
 
-function BadgeTrigger({ label, variant = 'secondary', title, className }: BadgeTriggerProps) {
-  return (
+/**
+ * BadgeTrigger is the element Radix PopoverTrigger slots its props into
+ * via `asChild`. It has to forward the ref **and** spread the remaining
+ * props (onClick, onKeyDown, aria-expanded, data-state, …) or clicks
+ * silently fall through and the popover never opens.
+ */
+const BadgeTrigger = forwardRef<HTMLButtonElement, BadgeTriggerProps>(
+  ({ label, variant = 'secondary', className, ...rest }, ref) => (
     <button
+      ref={ref}
       type="button"
       className={cn('cursor-pointer outline-none', className)}
-      title={title}
+      {...rest}
     >
       <Badge variant={variant} className="font-mono hover:ring-2 hover:ring-ring">
         {label} ▾
       </Badge>
     </button>
-  )
-}
+  ),
+)
+BadgeTrigger.displayName = 'BadgeTrigger'
 
 interface ProfileBadgeProps {
   current: string
