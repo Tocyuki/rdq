@@ -25,10 +25,15 @@ export function useSession() {
 export function useSaveSession() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (s: Session) => endpoints.putSession(s),
-    onSuccess: (_void, session) => {
-      qc.setQueryData(SESSION_KEY, session)
-      // Any list keyed on the previous profile should re-fetch.
+    // Partial<Session> because profile switches (and the "tri-state"
+    // production toggle) deliberately omit fields to let the server's
+    // merge-with-state.json logic pick up the new profile's stored value.
+    mutationFn: (s: Partial<Session>) => endpoints.putSession(s),
+    onSuccess: (rehydrated) => {
+      // The server returns the merged session (its own view of state.json
+      // + the delta the SPA sent), so seed the cache from the response
+      // rather than from the request body.
+      qc.setQueryData(SESSION_KEY, rehydrated)
       qc.invalidateQueries({ queryKey: ['clusters'] })
       qc.invalidateQueries({ queryKey: ['secrets'] })
       qc.invalidateQueries({ queryKey: ['databases'] })

@@ -5,6 +5,10 @@ package server
 // All fields may be empty — the GUI is responsible for nudging the user into
 // filling them in (via ConnectionDialog) before calling an endpoint that
 // actually needs them.
+//
+// IsProduction is a tri-state pointer that mirrors state.ProfileState: nil =
+// the user has not answered, true / false = explicit choice. The SPA paints
+// the ConnectionBar with a warning colour when it is true.
 type SessionDTO struct {
 	Profile         string `json:"profile"`
 	Cluster         string `json:"cluster"`
@@ -12,6 +16,7 @@ type SessionDTO struct {
 	Database        string `json:"database"`
 	BedrockModel    string `json:"bedrockModel"`
 	BedrockLanguage string `json:"bedrockLanguage"`
+	IsProduction    *bool  `json:"isProduction,omitempty"`
 }
 
 // HealthDTO is the JSON body of /api/health.

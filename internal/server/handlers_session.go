@@ -39,8 +39,13 @@ func (h *sessionHandlers) getSession(w http.ResponseWriter, _ *http.Request) {
 
 // putSession replaces the session wholesale and writes it back to state.json
 // (unless the profile is empty, which means ephemeral mode and skips disk).
-// All fields are taken verbatim from the request body; no merging with the
-// previous value, so the SPA sends a complete SessionDTO.
+//
+// The request body does not have to carry every field — nil pointers / empty
+// strings are treated as "SPA did not touch this", and PersistToState
+// conservatively preserves the previously-stored value for those fields.
+// After persisting we re-hydrate from state.json so the response and the
+// in-memory session reflect the merged, canonical view (e.g. a profile
+// switch picks up the new profile's stored production flag automatically).
 func (h *sessionHandlers) putSession(w http.ResponseWriter, r *http.Request) {
 	var dto SessionDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
@@ -50,14 +55,16 @@ func (h *sessionHandlers) putSession(w http.ResponseWriter, r *http.Request) {
 	}
 	h.session.Set(dto)
 	if err := h.session.PersistToState(); err != nil {
-		// Persistence failure is not fatal — the in-memory session is
-		// still updated and the SPA can continue. We surface it as a
-		// warning in the log so the operator can investigate.
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal,
 			"could not persist session to state.json: "+err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	// Re-hydrate so the in-memory session matches what is on disk after
+	// the merge (critical for profile switches where we want the new
+	// profile's stored flags to take effect immediately).
+	rehydrated := LoadFromState(h.session.Get())
+	h.session.Set(rehydrated)
+	writeJSON(w, rehydrated)
 }
 
 // profiles returns the AWS profile names configured in the local config /

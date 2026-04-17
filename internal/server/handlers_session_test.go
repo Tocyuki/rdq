@@ -71,11 +71,18 @@ func TestPutSessionUpdatesAndPersists(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/session", strings.NewReader(string(body)))
 	rr := httptest.NewRecorder()
 	h.putSession(rr, req)
-	if rr.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body.String())
 	}
-	if got := h.session.Get(); got != payload {
-		t.Errorf("session = %+v, want %+v", got, payload)
+	var got SessionDTO
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("invalid response JSON: %v", err)
+	}
+	if got.Profile != payload.Profile || got.Cluster != payload.Cluster || got.Secret != payload.Secret || got.Database != payload.Database {
+		t.Errorf("response session = %+v, want profile/cluster/secret/database to match %+v", got, payload)
+	}
+	if mem := h.session.Get(); mem.Profile != payload.Profile {
+		t.Errorf("in-memory session profile = %q, want %q", mem.Profile, payload.Profile)
 	}
 	// state.json should now exist and contain the profile entry.
 	data, err := os.ReadFile(filepath.Join(dir, "state.json"))
@@ -104,6 +111,34 @@ func TestPutSessionRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestPutSessionProductionFlagRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RDQ_STATE_FILE", filepath.Join(dir, "state.json"))
+
+	h := newTestSessionHandlers(SessionDTO{}, nil)
+	trueVal := true
+	payload := SessionDTO{
+		Profile:      "dev",
+		Cluster:      "arn:c",
+		Secret:       "arn:s",
+		Database:     "app",
+		IsProduction: &trueVal,
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPut, "/api/session", strings.NewReader(string(body)))
+	rr := httptest.NewRecorder()
+	h.putSession(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	// Reload seed: LoadFromState should recover IsProduction=true.
+	seeded := LoadFromState(SessionDTO{Profile: "dev"})
+	if seeded.IsProduction == nil || !*seeded.IsProduction {
+		t.Errorf("expected IsProduction=true after state.json round trip, got %v", seeded.IsProduction)
+	}
+}
+
 func TestPutSessionEphemeralDoesNotWriteState(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
@@ -116,8 +151,8 @@ func TestPutSessionEphemeralDoesNotWriteState(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/session", strings.NewReader(string(body)))
 	rr := httptest.NewRecorder()
 	h.putSession(rr, req)
-	if rr.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204", rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
 	}
 	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
 		t.Errorf("expected state.json to be untouched for empty profile, got err = %v", err)

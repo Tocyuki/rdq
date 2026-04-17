@@ -30,8 +30,13 @@ export const endpoints = {
   health: (signal?: AbortSignal) => api.get<Health>('/api/health', signal),
 
   getSession: (signal?: AbortSignal) => api.get<Session>('/api/session', signal),
-  putSession: (body: Session, signal?: AbortSignal) =>
-    api.put<void>('/api/session', body, signal),
+  /**
+   * putSession returns the merged SessionDTO the server just persisted
+   * (with state.json-backed fields re-hydrated). Callers should seed
+   * their cache with the response rather than echoing the request body.
+   */
+  putSession: (body: Partial<Session>, signal?: AbortSignal) =>
+    api.put<Session>('/api/session', body, signal),
 
   listProfiles: (signal?: AbortSignal) => api.get<Profiles>('/api/profiles', signal),
 

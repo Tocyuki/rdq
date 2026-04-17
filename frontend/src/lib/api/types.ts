@@ -15,6 +15,12 @@ export interface Session {
   database: string
   bedrockModel: string
   bedrockLanguage: string
+  /**
+   * Tri-state production flag: undefined = user has not answered,
+   * true / false = explicit choice. When true the SPA paints the
+   * ConnectionBar with a warning colour.
+   */
+  isProduction?: boolean
 }
 
 export interface Health {

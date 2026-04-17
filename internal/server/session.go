@@ -66,6 +66,15 @@ func (s *sessionStore) PersistToState() error {
 	if snap.Cluster != "" && snap.Secret != "" {
 		ps.ClusterSecrets[snap.Cluster] = snap.Secret
 	}
+	// IsProduction is tri-state and cross-profile: we only overwrite when
+	// the SPA explicitly sent a value. A nil snap pointer means "SPA did
+	// not touch this field" (e.g. a profile switch) — in that case we
+	// leave the new profile's previously-stored flag alone so switching
+	// profiles does not leak the old profile's production status.
+	if snap.IsProduction != nil {
+		v := *snap.IsProduction
+		ps.IsProduction = &v
+	}
 	st.Set(snap.Profile, ps)
 	return st.Save()
 }
@@ -97,6 +106,12 @@ func LoadFromState(seed SessionDTO) SessionDTO {
 	}
 	if seed.BedrockLanguage == "" {
 		seed.BedrockLanguage = ps.BedrockLanguage
+	}
+	// Production flag has no textual "zero" — only backfill when the seed
+	// has not explicitly carried one.
+	if seed.IsProduction == nil && ps.IsProduction != nil {
+		v := *ps.IsProduction
+		seed.IsProduction = &v
 	}
 	return seed
 }

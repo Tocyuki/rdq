@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Plug } from 'lucide-react'
+import { AlertTriangle, Plug } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { ConnectionDialog } from '@/features/connection/ConnectionDialog'
@@ -12,6 +13,7 @@ import {
 } from '@/features/connection/badge-popovers'
 import { useSaveSession, useSession } from '@/hooks/useSession'
 import type { Session } from '@/lib/api/types'
+import { cn } from '@/lib/utils'
 
 /**
  * shortARN returns the tail segment of an AWS ARN so the connection bar
@@ -44,12 +46,19 @@ export function ConnectionBar() {
    * handleProfileChange (plan item 1, A案): a profile switch invalidates
    * every downstream selection, so we clear cluster/secret/database and
    * reopen the full wizard under the new profile's resources.
+   *
+   * isProduction is deliberately dropped so the server treats the value
+   * as "SPA did not touch this" and leaves the new profile's stored
+   * production flag intact. Without this, the old profile's flag would
+   * bleed into the new profile's state.json entry.
    */
   function handleProfileChange(nextProfile: string) {
     if (nextProfile === data.profile) return
+    const { isProduction: _drop, ...rest } = data
+    void _drop
     save.mutate(
       {
-        ...data,
+        ...rest,
         profile: nextProfile,
         cluster: '',
         secret: '',
@@ -107,20 +116,42 @@ export function ConnectionBar() {
     )
   }
 
+  const isProduction = data.isProduction === true
+
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card px-4 text-sm">
+    <header
+      className={cn(
+        'flex h-12 shrink-0 items-center gap-3 border-b px-4 text-sm transition-colors',
+        isProduction
+          ? 'border-production/60 bg-production text-production-foreground'
+          : 'border-border bg-card',
+      )}
+    >
       <span className="font-semibold tracking-tight">rdq</span>
-      <Separator orientation="vertical" className="h-4" />
+      {isProduction && (
+        <Badge variant="production" className="gap-1 uppercase tracking-wider">
+          <AlertTriangle className="size-3" />
+          Production
+        </Badge>
+      )}
+      <Separator
+        orientation="vertical"
+        className={cn('h-4', isProduction && 'bg-production-foreground/40')}
+      />
 
       <ProfileBadge current={data.profile} onChange={handleProfileChange} />
-      <span className="text-muted-foreground">/</span>
+      <span className={cn(isProduction ? 'text-production-foreground/70' : 'text-muted-foreground')}>
+        /
+      </span>
       <ClusterBadge
         profile={data.profile}
         current={data.cluster}
         currentLabel={shortARN(data.cluster)}
         onChange={handleClusterChange}
       />
-      <span className="text-muted-foreground">/</span>
+      <span className={cn(isProduction ? 'text-production-foreground/70' : 'text-muted-foreground')}>
+        /
+      </span>
       <DatabaseBadge
         profile={data.profile}
         current={data.database}
@@ -128,7 +159,11 @@ export function ConnectionBar() {
       />
 
       <div className="flex-1" />
-      <Button size="sm" variant="outline" onClick={() => setDialogOpen(true)}>
+      <Button
+        size="sm"
+        variant={isProduction ? 'secondary' : 'outline'}
+        onClick={() => setDialogOpen(true)}
+      >
         <Plug />
         {data.profile && data.cluster && data.secret && data.database ? 'Change' : 'Connect'}
       </Button>
