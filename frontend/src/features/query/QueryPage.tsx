@@ -1,9 +1,13 @@
-import { useCallback } from 'react'
-import { Play } from 'lucide-react'
+import { useCallback, useState } from 'react'
+import { Bot, Play, ShieldCheck, Sparkles, Wand2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { sessionIsComplete, useSession } from '@/hooks/useSession'
+import { AnalyzeDialog } from '@/features/ai/AnalyzeDialog'
+import { AskDialog } from '@/features/ai/AskDialog'
+import { ExplainDialog } from '@/features/ai/ExplainDialog'
+import { ReviewDialog } from '@/features/ai/ReviewDialog'
 import { useSchema } from '@/features/schema/useSchema'
 import { SchemaSidebar } from '@/features/schema/SchemaSidebar'
 import { useUIStore } from '@/stores/uiStore'
@@ -31,6 +35,10 @@ export function QueryPage() {
     secret: session.data?.secret ?? '',
     database: session.data?.database ?? '',
   })
+  const [askOpen, setAskOpen] = useState(false)
+  const [reviewOpen, setReviewOpen] = useState(false)
+  const [analyzeOpen, setAnalyzeOpen] = useState(false)
+  const [explainOpen, setExplainOpen] = useState(false)
 
   const runQuery = useCallback(() => {
     if (!sessionIsComplete(session.data)) {
@@ -64,14 +72,30 @@ export function QueryPage() {
               Cmd / Ctrl + Enter to run
             </p>
           </div>
-          <Button
-            size="sm"
-            onClick={runQuery}
-            disabled={execute.isPending || !sessionIsComplete(session.data)}
-          >
-            <Play />
-            {execute.isPending ? 'Running…' : 'Run'}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setAskOpen(true)}>
+              <Sparkles /> Ask
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setReviewOpen(true)}>
+              <ShieldCheck /> Review
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setAnalyzeOpen(true)}>
+              <Wand2 /> Analyze
+            </Button>
+            {execute.error && (
+              <Button size="sm" variant="outline" onClick={() => setExplainOpen(true)}>
+                <Bot /> Explain
+              </Button>
+            )}
+            <Button
+              size="sm"
+              onClick={runQuery}
+              disabled={execute.isPending || !sessionIsComplete(session.data)}
+            >
+              <Play />
+              {execute.isPending ? 'Running…' : 'Run'}
+            </Button>
+          </div>
         </div>
 
         <div className="min-h-0 flex-[2] overflow-hidden p-3">
@@ -86,6 +110,14 @@ export function QueryPage() {
           />
         </div>
       </section>
+      <AskDialog open={askOpen} onOpenChange={setAskOpen} />
+      <ReviewDialog open={reviewOpen} onOpenChange={setReviewOpen} />
+      <AnalyzeDialog open={analyzeOpen} onOpenChange={setAnalyzeOpen} />
+      <ExplainDialog
+        open={explainOpen}
+        onOpenChange={setExplainOpen}
+        initialError={errorMessage ?? undefined}
+      />
     </div>
   )
 }

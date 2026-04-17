@@ -17,7 +17,7 @@
 - Get automatic, in-context error explanations whenever a query fails
 - Switch between AWS profiles, clusters, secrets, Bedrock models, and response languages without leaving the TUI
 
-The `gui` subcommand exposes a separate browser-based SQL client (React + Vite SPA embedded in the binary). `exec` and `ask` are placeholder stubs and will be wired to the same engines as the TUI in a future release.
+The `gui` subcommand exposes a browser-based SQL client (React + Vite SPA embedded in the binary) that delivers the same core experience: SQL execution, result viewing, CSV / JSON export, schema browsing, history, and Bedrock-assisted Ask / Review / Analyze / Explain flows. `exec` and `ask` are placeholder stubs and will be wired to the same engines as the TUI in a future release.
 
 ## Features
 
@@ -56,6 +56,19 @@ The `gui` subcommand exposes a separate browser-based SQL client (React + Vite S
 - **Persistent state** — profile / cluster / secret / database / Bedrock model / language are cached so subsequent launches skip the prompts
 - **Ephemeral mode for direct credentials** — when no profile name is in play (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` only), `rdq` walks through the cluster / secret / database pickers from scratch every launch and writes nothing to `~/.rdq/state.json` or the history log. The status bar shows `(direct credentials · ephemeral)` so the mode is visible
 - **Friendly credentials error** — if no provider in the SDK chain can produce credentials, `rdq` exits with an actionable message instead of the raw SDK error
+
+### GUI mode (browser-based SQL client)
+
+Launch with `rdq gui` (opens `http://127.0.0.1:8080` in your browser automatically; add `--no-open` to suppress). The GUI shares the same `internal/` engines as the TUI, so results, history, and schema caches are consistent across both surfaces.
+
+- **Connection wizard** — pick profile → cluster → secret → database from browser-side searchable lists; the selection persists to `~/.rdq/state.json` just like the TUI
+- **CodeMirror 6 SQL editor** — syntax highlighting, schema-aware autocomplete, `Cmd/Ctrl+Enter` to run
+- **Result viewer** with Table / JSON / Info tabs, row detail dialog, and CSV / JSON download
+- **History panel** — per-profile SQL log with substring search, favourites toggle, and "Load into editor"
+- **Schema sidebar** — filterable table/column tree; double-click to insert qualified names into the editor
+- **Bedrock AI dialogs** — Ask (natural language → SQL with multi-turn chat), Review (critique current SQL), Analyze (interpret last result), Explain (diagnose an error). Each response renders as Markdown with syntax-highlighted code blocks
+- **Security** — the server binds `127.0.0.1` only and enforces Origin / Host checks against the localhost allow-list; `--dev` temporarily adds `http://localhost:5173` so `cd frontend && npm run dev` proxying works during frontend development
+- **Graceful shutdown** — `SIGINT` / `SIGTERM` drains in-flight requests within 10 s
 
 ## Installation
 
