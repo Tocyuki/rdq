@@ -174,7 +174,7 @@ function HistoryRow({
           )}
         </button>
       </div>
-      <div className="flex-1 overflow-hidden">
+      <div className="min-w-0 flex-1 overflow-hidden">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <time dateTime={entry.at}>{when.toLocaleString()}</time>
           <span>·</span>

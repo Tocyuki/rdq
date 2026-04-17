@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef } from 'react'
-import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
+import { useEffect, useMemo, useState } from 'react'
+import CodeMirror from '@uiw/react-codemirror'
+import type { EditorView } from '@codemirror/view'
 
 import { useUIStore } from '@/stores/uiStore'
 import { createSqlExtensions, engineFromClusterEngine, type Engine } from './extensions'
@@ -17,16 +18,21 @@ interface Props {
  * editor state:
  *   - Reads the current buffer from Zustand on render.
  *   - Writes back on every onChange.
- *   - Consumes pendingEditorText (written by AI dialogs) via a
- *     dispatch call so the SPA can replace the editor text without a
- *     round-trip through React state.
+ *   - Consumes pendingEditorText (written by AI dialogs, History, etc.)
+ *     via an imperative dispatch so the SPA can replace the doc without
+ *     forcing a full React re-render.
+ *
+ * The EditorView is tracked via `onCreateEditor` → useState so the
+ * pending-text effect fires both when `pending` changes *and* when the
+ * view becomes available. An earlier ref-only implementation silently
+ * skipped the first run when CodeMirror had not yet mounted the view.
  */
 export function SqlEditor({ engineHint, schema, onRun }: Props) {
   const sql = useUIStore((s) => s.sql)
   const setSql = useUIStore((s) => s.setSql)
   const pending = useUIStore((s) => s.pendingEditorText)
   const clearPending = useUIStore((s) => s.clearEditorText)
-  const cmRef = useRef<ReactCodeMirrorRef>(null)
+  const [view, setView] = useState<EditorView | null>(null)
 
   const engine: Engine = engineFromClusterEngine(engineHint)
   const schemaHint = useMemo(() => toSqlSchemaHint(schema), [schema])
@@ -35,28 +41,24 @@ export function SqlEditor({ engineHint, schema, onRun }: Props) {
     [engine, onRun, schemaHint],
   )
 
-  // Apply pending text from AI Insert action: imperative dispatch is the
-  // CodeMirror-native way to replace the doc without a React round trip.
   useEffect(() => {
-    if (!pending) return
-    const view = cmRef.current?.view
-    if (!view) return
+    if (!pending || !view) return
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: pending },
     })
     setSql(pending)
     clearPending()
-  }, [pending, setSql, clearPending])
+  }, [pending, view, setSql, clearPending])
 
   return (
     <div className="h-full overflow-hidden rounded-md border border-border">
       <CodeMirror
-        ref={cmRef}
         value={sql}
         theme="dark"
         height="100%"
         extensions={extensions}
         onChange={setSql}
+        onCreateEditor={setView}
         basicSetup={{
           lineNumbers: true,
           foldGutter: true,

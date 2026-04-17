@@ -3,7 +3,7 @@ import { defaultKeymap, indentWithTab } from '@codemirror/commands'
 import { MySQL, PostgreSQL, sql } from '@codemirror/lang-sql'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { EditorView, keymap } from '@codemirror/view'
-import type { Extension } from '@codemirror/state'
+import { Prec, type Extension } from '@codemirror/state'
 
 /**
  * Engine identifies the SQL dialect CodeMirror should highlight. Values
@@ -29,6 +29,10 @@ interface Opts {
  * SqlEditor. It wires the dialect, autocompletion, one-dark theme, and
  * the Mod-Enter "run" shortcut. Passing a non-empty `schema` unlocks
  * table / column name completion inside the editor.
+ *
+ * The Run shortcut is wrapped in Prec.highest so it wins against the
+ * default Mod-Enter binding (insertBlankLine) that @uiw/react-codemirror
+ * registers via its bundled basicSetup.
  */
 export function createSqlExtensions({ engine, onRun, schema }: Opts): Extension[] {
   return [
@@ -40,17 +44,18 @@ export function createSqlExtensions({ engine, onRun, schema }: Opts): Extension[
     autocompletion(),
     oneDark,
     EditorView.lineWrapping,
-    keymap.of([
-      {
-        key: 'Mod-Enter',
-        preventDefault: true,
-        run: () => {
-          onRun()
-          return true
+    Prec.highest(
+      keymap.of([
+        {
+          key: 'Mod-Enter',
+          preventDefault: true,
+          run: () => {
+            onRun()
+            return true
+          },
         },
-      },
-      ...defaultKeymap,
-      indentWithTab,
-    ]),
+      ]),
+    ),
+    keymap.of([...defaultKeymap, indentWithTab]),
   ]
 }
