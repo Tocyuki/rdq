@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Copy, Play, Star, StarOff } from 'lucide-react'
+import { Copy, FileInput, Star, StarOff } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -16,15 +16,12 @@ import { useHistory, useSetFavorite } from './useHistory'
 
 /**
  * HistoryPage lists executed statements for the active (profile, database)
- * with a fuzzy-ish substring search, favourite toggle, and two explicit
- * actions per row:
+ * with a substring search, favourite toggle, and two explicit actions:
  *
- *   - "Run" (or row click)  — paste into the editor AND execute
- *   - "Copy"                — copy the SQL text to the OS clipboard
- *
- * Selecting a row bounces the user to /query where SqlEditor consumes
- * pendingEditorText to repopulate CodeMirror, and QueryPage's effect
- * auto-runs the statement once the text has been dispatched.
+ *   - Row click (or Load button): paste the SQL into the editor and
+ *     navigate to /query. Execution is intentionally NOT triggered —
+ *     the user confirms by pressing Cmd/Ctrl+Enter or the Run button.
+ *   - Copy button: copy the SQL text to the OS clipboard.
  */
 export function HistoryPage() {
   const session = useSession()
@@ -56,9 +53,11 @@ export function HistoryPage() {
     )
   }
 
-  function runFromHistory(sql: string) {
-    requestEditorText(sql, { autoRun: true })
-    toast.info('Loaded into editor — running…')
+  function loadIntoEditor(sql: string) {
+    // autoRun intentionally false: paste only. User executes via Run
+    // button or Cmd/Ctrl+Enter after reviewing the statement.
+    requestEditorText(sql)
+    toast.success('Loaded into editor')
     navigate('/query')
   }
 
@@ -111,7 +110,7 @@ export function HistoryPage() {
                 onFavorite={() =>
                   favMut.mutate({ at: entry.at, favorite: !entry.favorite })
                 }
-                onRun={() => runFromHistory(entry.sql)}
+                onLoad={() => loadIntoEditor(entry.sql)}
                 onCopy={() => copyToClipboard(entry.sql)}
               />
             </li>
@@ -130,12 +129,12 @@ export function HistoryPage() {
 function HistoryRow({
   entry,
   onFavorite,
-  onRun,
+  onLoad,
   onCopy,
 }: {
   entry: HistoryEntry
   onFavorite: () => void
-  onRun: () => void
+  onLoad: () => void
   onCopy: () => void
 }) {
   const when = new Date(entry.at)
@@ -143,11 +142,11 @@ function HistoryRow({
     <div
       role="button"
       tabIndex={0}
-      onClick={onRun}
+      onClick={onLoad}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
-          onRun()
+          onLoad()
         }
       }}
       className={cn(
@@ -155,7 +154,7 @@ function HistoryRow({
         'hover:bg-muted/50 focus-visible:bg-muted/70 focus-visible:outline-none',
         'cursor-pointer',
       )}
-      title="Click to load into editor and run"
+      title="Click to load into editor"
     >
       <div
         className="flex flex-col items-center gap-1 pt-1"
@@ -206,11 +205,11 @@ function HistoryRow({
         <Button
           size="sm"
           variant="outline"
-          onClick={onRun}
-          title="Load into editor and run"
+          onClick={onLoad}
+          title="Load into editor"
         >
-          <Play />
-          Run
+          <FileInput />
+          Load
         </Button>
       </div>
     </div>

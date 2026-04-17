@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { ChevronRight, Table as TableIcon } from 'lucide-react'
+import { ChevronRight, Copy, Table as TableIcon } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -17,9 +18,16 @@ interface GroupedTable {
 
 /**
  * SchemaSidebar is the left pane inside QueryPage that lets users browse
- * information_schema and double-click a column / table to insert its
- * qualified identifier into the editor via the UI store's
- * pendingEditorText slot.
+ * information_schema.
+ *
+ * Interactions:
+ *   - Click a table row: expand / collapse its column list.
+ *   - Double-click a table / column: append the qualified identifier to
+ *     the editor buffer via pendingEditorText.
+ *   - Select (click) a column to reveal a Copy button on the right, or
+ *     hover any row to see the same button. Copying emits `table.column`
+ *     for columns and the bare table name for table rows so the text is
+ *     ready to paste into a SELECT.
  */
 export function SchemaSidebar() {
   const session = useSession()
@@ -34,6 +42,7 @@ export function SchemaSidebar() {
 
   const [filter, setFilter] = useState('')
   const [openTables, setOpenTables] = useState<Set<string>>(new Set())
+  const [selected, setSelected] = useState<string | null>(null)
 
   const tables = useMemo<GroupedTable[]>(() => {
     const cols = schema.data?.columns ?? []
@@ -65,6 +74,15 @@ export function SchemaSidebar() {
 
   if (!sessionIsComplete(session.data)) {
     return null
+  }
+
+  async function copyToken(token: string) {
+    try {
+      await navigator.clipboard.writeText(token)
+      toast.success(`Copied "${token}"`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Copy failed')
+    }
   }
 
   return (
@@ -103,9 +121,13 @@ export function SchemaSidebar() {
             const open = openTables.has(key)
             return (
               <li key={key}>
-                <button
-                  className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-accent hover:text-accent-foreground"
-                  onClick={() => {
+                <Row
+                  selected={selected === key}
+                  onSelect={() => setSelected(key)}
+                  onDoubleClick={() =>
+                    requestEditorText(appendToken(currentSql, t.table))
+                  }
+                  onToggle={() => {
                     setOpenTables((prev) => {
                       const next = new Set(prev)
                       if (next.has(key)) next.delete(key)
@@ -113,9 +135,8 @@ export function SchemaSidebar() {
                       return next
                     })
                   }}
-                  onDoubleClick={() => {
-                    requestEditorText(appendToken(currentSql, t.table))
-                  }}
+                  onCopy={() => copyToken(t.table)}
+                  copyTitle={`Copy "${t.table}"`}
                 >
                   <ChevronRight
                     className={cn('size-3 transition-transform', open && 'rotate-90')}
@@ -125,26 +146,31 @@ export function SchemaSidebar() {
                   <span className="ml-auto text-[10px] text-muted-foreground">
                     {t.columns.length}
                   </span>
-                </button>
+                </Row>
                 {open && (
                   <ul className="ml-5 mt-0.5 space-y-0.5">
-                    {t.columns.map((c) => (
-                      <li key={c.name}>
-                        <button
-                          className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-accent hover:text-accent-foreground"
-                          onDoubleClick={() => {
-                            requestEditorText(
-                              appendToken(currentSql, `${t.table}.${c.name}`),
-                            )
-                          }}
-                        >
-                          <span className="truncate">{c.name}</span>
-                          <span className="ml-auto text-[10px] text-muted-foreground">
-                            {c.type}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
+                    {t.columns.map((c) => {
+                      const colKey = `${key}.${c.name}`
+                      const qualified = `${t.table}.${c.name}`
+                      return (
+                        <li key={c.name}>
+                          <Row
+                            selected={selected === colKey}
+                            onSelect={() => setSelected(colKey)}
+                            onDoubleClick={() =>
+                              requestEditorText(appendToken(currentSql, qualified))
+                            }
+                            onCopy={() => copyToken(qualified)}
+                            copyTitle={`Copy "${qualified}"`}
+                          >
+                            <span className="truncate">{c.name}</span>
+                            <span className="ml-auto text-[10px] text-muted-foreground">
+                              {c.type}
+                            </span>
+                          </Row>
+                        </li>
+                      )
+                    })}
                   </ul>
                 )}
               </li>
@@ -153,9 +179,70 @@ export function SchemaSidebar() {
         </ul>
       </ScrollArea>
       <div className="border-t border-border px-3 py-2 text-[10px] text-muted-foreground">
-        Double-click a table or column to insert.
+        Double-click to insert · click to select &amp; copy
       </div>
     </aside>
+  )
+}
+
+function Row({
+  selected,
+  onSelect,
+  onToggle,
+  onDoubleClick,
+  onCopy,
+  copyTitle,
+  children,
+}: {
+  selected: boolean
+  onSelect: () => void
+  onToggle?: () => void
+  onDoubleClick: () => void
+  onCopy: () => void
+  copyTitle: string
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => {
+        onSelect()
+        onToggle?.()
+      }}
+      onDoubleClick={onDoubleClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelect()
+          onToggle?.()
+        }
+      }}
+      className={cn(
+        'group flex w-full items-center gap-1 rounded px-1 py-0.5 text-left cursor-pointer',
+        'hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none',
+        selected && 'bg-accent text-accent-foreground',
+      )}
+    >
+      {children}
+      <button
+        type="button"
+        title={copyTitle}
+        aria-label={copyTitle}
+        onClick={(e) => {
+          e.stopPropagation()
+          onCopy()
+        }}
+        className={cn(
+          'ml-1 flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-opacity',
+          'hover:bg-background hover:text-foreground',
+          // Always visible when selected; otherwise fade in on hover.
+          selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+        )}
+      >
+        <Copy className="size-3" />
+      </button>
+    </div>
   )
 }
 

@@ -52,10 +52,11 @@ BadgeTrigger.displayName = 'BadgeTrigger'
 
 interface ProfileBadgeProps {
   current: string
+  variant?: BadgeProps['variant']
   onChange: (profile: string) => void
 }
 
-export function ProfileBadge({ current, onChange }: ProfileBadgeProps) {
+export function ProfileBadge({ current, variant = 'secondary', onChange }: ProfileBadgeProps) {
   const [open, setOpen] = useState(false)
   const q = useQuery({
     queryKey: ['profiles'],
@@ -65,7 +66,7 @@ export function ProfileBadge({ current, onChange }: ProfileBadgeProps) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <BadgeTrigger label={current || 'pick profile'} variant="secondary" title="Switch profile" />
+        <BadgeTrigger label={current || 'pick profile'} variant={variant} title="Switch profile" />
       </PopoverTrigger>
       <PopoverContent>
         <Command>
@@ -99,6 +100,7 @@ interface ClusterBadgeProps {
   profile: string
   current: string
   currentLabel: string
+  variant?: BadgeProps['variant']
   /**
    * onChange fires after both a cluster pick and its follow-up secret
    * pick so the parent can commit them in one PUT /api/session call.
@@ -118,7 +120,7 @@ type Stage = 'cluster' | 'secret'
  * popover surface for both steps means the cascading flow happens in a
  * single visual spot anchored to the cluster badge.
  */
-export function ClusterBadge({ profile, current, currentLabel, onChange }: ClusterBadgeProps) {
+export function ClusterBadge({ profile, current, currentLabel, variant = 'outline', onChange }: ClusterBadgeProps) {
   const [open, setOpen] = useState(false)
   const [stage, setStage] = useState<Stage>('cluster')
   const [pendingCluster, setPendingCluster] = useState<{ arn: string; engine: string } | null>(null)
@@ -153,7 +155,7 @@ export function ClusterBadge({ profile, current, currentLabel, onChange }: Clust
           className="cursor-pointer outline-none"
           title="Switch cluster"
         >
-          <Badge variant="outline" className="font-mono hover:ring-2 hover:ring-ring">
+          <Badge variant={variant} className="font-mono hover:ring-2 hover:ring-ring">
             {currentLabel || 'pick cluster'} ▾
           </Badge>
         </button>
@@ -248,10 +250,11 @@ export function ClusterBadge({ profile, current, currentLabel, onChange }: Clust
 interface DatabaseBadgeProps {
   profile: string
   current: string
+  variant?: BadgeProps['variant']
   onChange: (database: string) => void
 }
 
-export function DatabaseBadge({ profile, current, onChange }: DatabaseBadgeProps) {
+export function DatabaseBadge({ profile, current, variant = 'outline', onChange }: DatabaseBadgeProps) {
   const [open, setOpen] = useState(false)
   const [typed, setTyped] = useState(current)
   const q = useQuery({
@@ -275,7 +278,7 @@ export function DatabaseBadge({ profile, current, onChange }: DatabaseBadgeProps
       }}
     >
       <PopoverTrigger asChild>
-        <BadgeTrigger label={current || 'pick db'} variant="outline" title="Switch database" />
+        <BadgeTrigger label={current || 'pick db'} variant={variant} title="Switch database" />
       </PopoverTrigger>
       <PopoverContent>
         <div className="space-y-2 p-3">

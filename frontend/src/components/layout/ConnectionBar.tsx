@@ -147,6 +147,7 @@ export function ConnectionBar() {
         profile={data.profile}
         current={data.cluster}
         currentLabel={shortARN(data.cluster)}
+        variant={isProduction ? 'secondary' : 'outline'}
         onChange={handleClusterChange}
       />
       <span className={cn(isProduction ? 'text-production-foreground/70' : 'text-muted-foreground')}>
@@ -155,6 +156,7 @@ export function ConnectionBar() {
       <DatabaseBadge
         profile={data.profile}
         current={data.database}
+        variant={isProduction ? 'secondary' : 'outline'}
         onChange={handleDatabaseChange}
       />
 
