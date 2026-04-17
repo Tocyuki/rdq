@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Bot, Play, ShieldCheck, Sparkles, Wand2 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -28,6 +28,9 @@ import { useExecuteQuery } from './useExecuteQuery'
 export function QueryPage() {
   const session = useSession()
   const sql = useUIStore((s) => s.sql)
+  const pendingAutoRun = useUIStore((s) => s.pendingAutoRun)
+  const pendingEditorText = useUIStore((s) => s.pendingEditorText)
+  const clearAutoRun = useUIStore((s) => s.clearAutoRun)
   const execute = useExecuteQuery()
   const schema = useSchema({
     profile: session.data?.profile ?? '',
@@ -58,6 +61,30 @@ export function QueryPage() {
       sql,
     })
   }, [session.data, sql, execute])
+
+  /**
+   * autoRanRef prevents re-firing the mutation on re-renders after the
+   * pendingAutoRun flag is consumed. We only want one execution per
+   * "Run from history" action; clearAutoRun() flips the store flag back
+   * to false, but we guard with a ref in case multiple renders occur
+   * before the store update propagates.
+   */
+  const autoRanRef = useRef(false)
+  useEffect(() => {
+    if (!pendingAutoRun) {
+      autoRanRef.current = false
+      return
+    }
+    // Wait until SqlEditor has consumed the pending text (it clears
+    // pendingEditorText after dispatching into CodeMirror + setSql).
+    if (pendingEditorText !== null) return
+    if (!sessionIsComplete(session.data)) return
+    if (!sql.trim()) return
+    if (autoRanRef.current) return
+    autoRanRef.current = true
+    clearAutoRun()
+    runQuery()
+  }, [pendingAutoRun, pendingEditorText, sql, session.data, clearAutoRun, runQuery])
 
   const errorMessage = execute.error?.message ?? null
 

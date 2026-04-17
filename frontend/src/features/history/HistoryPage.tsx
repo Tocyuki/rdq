@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Copy, Star, StarOff } from 'lucide-react'
+import { Copy, Play, Star, StarOff } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -10,14 +10,21 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { useSession } from '@/hooks/useSession'
 import { useUIStore } from '@/stores/uiStore'
 import type { HistoryEntry } from '@/lib/api/types'
+import { cn } from '@/lib/utils'
 
 import { useHistory, useSetFavorite } from './useHistory'
 
 /**
  * HistoryPage lists executed statements for the active (profile, database)
- * with a fuzzy-ish substring search, favourite toggle, and "Load into
- * editor" action that bounces the user back to /query with the SQL
- * pre-populated via the UI store's pendingEditorText slot.
+ * with a fuzzy-ish substring search, favourite toggle, and two explicit
+ * actions per row:
+ *
+ *   - "Run" (or row click)  — paste into the editor AND execute
+ *   - "Copy"                — copy the SQL text to the OS clipboard
+ *
+ * Selecting a row bounces the user to /query where SqlEditor consumes
+ * pendingEditorText to repopulate CodeMirror, and QueryPage's effect
+ * auto-runs the statement once the text has been dispatched.
  */
 export function HistoryPage() {
   const session = useSession()
@@ -47,6 +54,21 @@ export function HistoryPage() {
         Select a profile and database to view history.
       </section>
     )
+  }
+
+  function runFromHistory(sql: string) {
+    requestEditorText(sql, { autoRun: true })
+    toast.info('Loaded into editor — running…')
+    navigate('/query')
+  }
+
+  async function copyToClipboard(sql: string) {
+    try {
+      await navigator.clipboard.writeText(sql)
+      toast.success('SQL copied to clipboard')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Copy failed')
+    }
   }
 
   return (
@@ -83,17 +105,14 @@ export function HistoryPage() {
       <ScrollArea className="min-h-0 flex-1">
         <ul className="divide-y divide-border">
           {filtered.map((entry) => (
-            <li key={entry.at} className="p-3">
+            <li key={entry.at}>
               <HistoryRow
                 entry={entry}
                 onFavorite={() =>
                   favMut.mutate({ at: entry.at, favorite: !entry.favorite })
                 }
-                onLoad={() => {
-                  requestEditorText(entry.sql)
-                  toast.success('Loaded into editor')
-                  navigate('/query')
-                }}
+                onRun={() => runFromHistory(entry.sql)}
+                onCopy={() => copyToClipboard(entry.sql)}
               />
             </li>
           ))}
@@ -111,22 +130,48 @@ export function HistoryPage() {
 function HistoryRow({
   entry,
   onFavorite,
-  onLoad,
+  onRun,
+  onCopy,
 }: {
   entry: HistoryEntry
   onFavorite: () => void
-  onLoad: () => void
+  onRun: () => void
+  onCopy: () => void
 }) {
   const when = new Date(entry.at)
   return (
-    <div className="flex items-start gap-3">
-      <div className="flex flex-col items-center gap-1 pt-1">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onRun}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onRun()
+        }
+      }}
+      className={cn(
+        'flex items-start gap-3 p-3 transition-colors',
+        'hover:bg-muted/50 focus-visible:bg-muted/70 focus-visible:outline-none',
+        'cursor-pointer',
+      )}
+      title="Click to load into editor and run"
+    >
+      <div
+        className="flex flex-col items-center gap-1 pt-1"
+        onClick={(e) => e.stopPropagation()}
+      >
         <button
+          type="button"
           title={entry.favorite ? 'Unfavourite' : 'Favourite'}
           onClick={onFavorite}
           className="text-muted-foreground hover:text-foreground"
         >
-          {entry.favorite ? <Star className="size-4 fill-current" /> : <StarOff className="size-4" />}
+          {entry.favorite ? (
+            <Star className="size-4 fill-current" />
+          ) : (
+            <StarOff className="size-4" />
+          )}
         </button>
       </div>
       <div className="flex-1 overflow-hidden">
@@ -145,10 +190,29 @@ function HistoryRow({
           <div className="mt-1 text-xs text-destructive">{entry.error}</div>
         )}
       </div>
-      <Button size="sm" variant="ghost" onClick={onLoad} title="Load into editor">
-        <Copy />
-        Load
-      </Button>
+      <div
+        className="flex shrink-0 items-center gap-1"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={onCopy}
+          title="Copy SQL to clipboard"
+          aria-label="Copy SQL to clipboard"
+        >
+          <Copy />
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onRun}
+          title="Load into editor and run"
+        >
+          <Play />
+          Run
+        </Button>
+      </div>
     </div>
   )
 }
