@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { Toaster } from '@/components/ui/sonner'
+import { SessionGate } from '@/providers/SessionGate'
 import App from './App.tsx'
 import './index.css'
 
@@ -25,7 +26,9 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={qc}>
       <BrowserRouter>
-        <App />
+        <SessionGate>
+          <App />
+        </SessionGate>
         <Toaster />
       </BrowserRouter>
     </QueryClientProvider>
