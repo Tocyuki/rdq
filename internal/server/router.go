@@ -21,6 +21,11 @@ func buildRouter(deps handlerDeps) http.Handler {
 	mux.HandleFunc("PUT /api/session", sess.putSession)
 	mux.HandleFunc("GET /api/profiles", sess.profiles)
 
+	conn := newConnectionHandlers(deps.awsCache)
+	mux.HandleFunc("GET /api/clusters", conn.clusters)
+	mux.HandleFunc("GET /api/secrets", conn.secrets)
+	mux.HandleFunc("GET /api/databases", conn.databases)
+
 	// SPA static + fallback handler. Mounted on the root so it catches
 	// everything the API router did not.
 	mux.Handle("/", spaHandler(deps.distFS))
@@ -34,6 +39,7 @@ func buildRouter(deps handlerDeps) http.Handler {
 // variant without Options plumbing.
 type handlerDeps struct {
 	session        *sessionStore
+	awsCache       *awsCache
 	distFS         fs.FS
 	allowedOrigins []string
 }

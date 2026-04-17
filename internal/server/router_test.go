@@ -22,6 +22,7 @@ func routerTestFS() fs.FS {
 func newTestRouter() http.Handler {
 	return buildRouter(handlerDeps{
 		session:        newSessionStore(SessionDTO{Profile: "seed"}),
+		awsCache:       newAWSCache(),
 		distFS:         routerTestFS(),
 		allowedOrigins: []string{"http://127.0.0.1:8080"},
 	})

@@ -63,6 +63,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	deps := handlerDeps{
 		session:        newSessionStore(seed),
+		awsCache:       newAWSCache(),
 		distFS:         distFS,
 		allowedOrigins: allowedOrigins(opts.Port, opts.Dev),
 	}
