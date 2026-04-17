@@ -3,9 +3,12 @@ import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 
 import { useUIStore } from '@/stores/uiStore'
 import { createSqlExtensions, engineFromClusterEngine, type Engine } from './extensions'
+import { toSqlSchemaHint } from '@/features/schema/schemaToCompletions'
+import type { Schema } from '@/lib/api/types'
 
 interface Props {
   engineHint?: string
+  schema?: Schema
   onRun: () => void
 }
 
@@ -18,7 +21,7 @@ interface Props {
  *     dispatch call so the SPA can replace the editor text without a
  *     round-trip through React state.
  */
-export function SqlEditor({ engineHint, onRun }: Props) {
+export function SqlEditor({ engineHint, schema, onRun }: Props) {
   const sql = useUIStore((s) => s.sql)
   const setSql = useUIStore((s) => s.setSql)
   const pending = useUIStore((s) => s.pendingEditorText)
@@ -26,9 +29,10 @@ export function SqlEditor({ engineHint, onRun }: Props) {
   const cmRef = useRef<ReactCodeMirrorRef>(null)
 
   const engine: Engine = engineFromClusterEngine(engineHint)
+  const schemaHint = useMemo(() => toSqlSchemaHint(schema), [schema])
   const extensions = useMemo(
-    () => createSqlExtensions({ engine, onRun }),
-    [engine, onRun],
+    () => createSqlExtensions({ engine, onRun, schema: schemaHint }),
+    [engine, onRun, schemaHint],
   )
 
   // Apply pending text from AI Insert action: imperative dispatch is the

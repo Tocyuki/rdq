@@ -20,19 +20,22 @@ export function engineFromClusterEngine(s: string | undefined): Engine {
 interface Opts {
   engine: Engine
   onRun: () => void
+  /** Table → columns map for schema-aware autocomplete. Empty object is fine. */
+  schema?: Record<string, string[]>
 }
 
 /**
  * createSqlExtensions returns the CodeMirror extension list used by the
  * SqlEditor. It wires the dialect, autocompletion, one-dark theme, and
- * the Mod-Enter "run" shortcut. Schema-driven autocompletion is added in
- * F4 by passing a different `sql({schema})` config.
+ * the Mod-Enter "run" shortcut. Passing a non-empty `schema` unlocks
+ * table / column name completion inside the editor.
  */
-export function createSqlExtensions({ engine, onRun }: Opts): Extension[] {
+export function createSqlExtensions({ engine, onRun, schema }: Opts): Extension[] {
   return [
     sql({
       dialect: engine === 'mysql' ? MySQL : PostgreSQL,
       upperCaseKeywords: true,
+      schema: schema && Object.keys(schema).length > 0 ? schema : undefined,
     }),
     autocompletion(),
     oneDark,
