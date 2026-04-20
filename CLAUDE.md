@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-`rdq` ("RDS Data Query") is a Go CLI built on the Kong framework that
+`rdq` ("RDS Data API Query") is a Go CLI built on the Kong framework that
 wraps the AWS RDS Data API for Aurora. The entry point is
 `cmd/rdq/main.go`, which dispatches to one of four subcommands under
 `command/`: `exec`, `ask`, `gui`, `tui` (with `tui` marked
