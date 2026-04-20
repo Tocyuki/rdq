@@ -24,6 +24,7 @@ import { Label } from '@/components/ui/label'
 import { useSaveSession, useSession } from '@/hooks/useSession'
 import { endpoints } from '@/lib/api/endpoints'
 import type { Session } from '@/lib/api/types'
+import { cn } from '@/lib/utils'
 
 type Step = 'profile' | 'cluster' | 'secret' | 'database'
 
@@ -319,6 +320,9 @@ function SecretStep({
   )
 }
 
+// Flat layout — a free-text input is primary here, so PickerShell's
+// bordered listbox shell (used by the other three steps) would just
+// nest borders around the label.
 function DatabaseStep({
   profile,
   value,
@@ -333,44 +337,69 @@ function DatabaseStep({
     queryFn: ({ signal }) => endpoints.listDatabases(profile, signal),
   })
   const [typed, setTyped] = useState(value)
+  const history = q.data?.history ?? []
 
   return (
-    <PickerShell label="Database" loading={q.isLoading} error={q.error}>
-      <div className="space-y-3">
-        <div className="space-y-1">
-          <Label htmlFor="db">Database name</Label>
-          <Input
-            id="db"
-            value={typed}
-            onChange={(e) => {
-              setTyped(e.target.value)
-              onPick(e.target.value)
-            }}
-            placeholder="e.g. app"
-          />
-        </div>
-        {q.data?.history && q.data.history.length > 0 && (
-          <Command className="rounded-md border border-border">
-            <CommandList>
-              <CommandGroup heading="Recent">
-                {q.data.history.map((h) => (
-                  <CommandItem
-                    key={h}
-                    value={h}
-                    onSelect={() => {
+    <div className="space-y-5">
+      <div className="space-y-1.5">
+        <Label htmlFor="db">Database name</Label>
+        <Input
+          id="db"
+          value={typed}
+          onChange={(e) => {
+            setTyped(e.target.value)
+            onPick(e.target.value)
+          }}
+          placeholder="e.g. app"
+          autoFocus
+        />
+        <p className="text-xs text-muted-foreground">
+          Type a database, or pick from your recent list below.
+        </p>
+      </div>
+
+      {q.isLoading && (
+        <p className="text-xs text-muted-foreground">Loading recent…</p>
+      )}
+      {!!q.error && (
+        <p className="text-xs text-destructive">
+          {q.error instanceof Error ? q.error.message : 'Could not load history.'}
+        </p>
+      )}
+
+      {history.length > 0 && (
+        <section className="space-y-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Recent
+          </p>
+          <ul className="overflow-hidden rounded-md border border-border">
+            {history.map((h, idx) => {
+              const selected = value === h
+              return (
+                <li
+                  key={h}
+                  className={cn(idx > 0 && 'border-t border-border')}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
                       setTyped(h)
                       onPick(h)
                     }}
+                    className={cn(
+                      'flex w-full items-center px-3 py-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground',
+                      selected && 'bg-accent font-medium text-accent-foreground',
+                    )}
                   >
                     {h}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            </CommandList>
-          </Command>
-        )}
-      </div>
-    </PickerShell>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
+    </div>
   )
 }
 
