@@ -11,7 +11,6 @@ export const ErrorCode = {
   AWSError: 'aws_error',
   Internal: 'internal',
   ReadOnly: 'read_only',
-  ConfirmationRequired: 'confirmation_required',
 } as const
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode]

@@ -10,8 +10,6 @@ import { ExplainDialog } from '@/features/ai/ExplainDialog'
 import { ReviewDialog } from '@/features/ai/ReviewDialog'
 import { useSchema } from '@/features/schema/useSchema'
 import { SchemaSidebar } from '@/features/schema/SchemaSidebar'
-import { ApiError } from '@/lib/api/client'
-import { ErrorCode } from '@/lib/api/error-codes'
 import { resolveRunSql, useUIStore } from '@/stores/uiStore'
 
 import { ConfirmRunDialog } from './ConfirmRunDialog'
@@ -31,16 +29,9 @@ interface PendingConfirm {
 }
 
 /**
- * QueryPage hosts the editor + result stack. Run is invoked via either
- * the Run button or Cmd/Ctrl+Enter inside the editor — both paths call
- * the same useExecuteQuery mutation.
- *
- * Destructive-statement guard: when /api/execute returns
- * errCodeConfirmationRequired (HTTP 409) we capture the args that
- * triggered it in `pendingConfirm`, show <ConfirmRunDialog>, and on
- * "Run anyway" re-invoke the mutation with `confirmed: true`. The
- * mutation's default onError suppresses the toast for this code so
- * the dialog is the only surface for the prompt.
+ * QueryPage hosts the editor + result stack. Destructive statements
+ * trigger <ConfirmRunDialog> via the `needsConfirmation` response flag;
+ * see ExecuteResponse in internal/server/types.go for the contract.
  */
 export function QueryPage() {
   const session = useSession()
@@ -78,9 +69,9 @@ export function QueryPage() {
       sql: effectiveSql,
     }
     execute.mutate(args, {
-      onError: (err) => {
-        if (err instanceof ApiError && err.code === ErrorCode.ConfirmationRequired) {
-          setPendingConfirm({ args, reason: err.message })
+      onSuccess: (res) => {
+        if (res.needsConfirmation) {
+          setPendingConfirm({ args, reason: res.confirmReason ?? '' })
         }
       },
     })
@@ -96,6 +87,7 @@ export function QueryPage() {
   }, [pendingConfirm, execute])
 
   const errorMessage = execute.error?.message ?? null
+  const visibleResult = execute.data?.needsConfirmation ? null : execute.data ?? null
 
   return (
     <div className="flex h-full">
@@ -140,7 +132,7 @@ export function QueryPage() {
 
         <div className="min-h-0 flex-[3] border-t border-border">
           <ResultPanel
-            result={execute.data ?? null}
+            result={visibleResult}
             error={errorMessage}
             loading={execute.isPending}
           />

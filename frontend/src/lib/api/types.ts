@@ -72,12 +72,8 @@ export interface ExecuteRequestBody {
   secret: string
   database: string
   sql: string
-  /**
-   * Set to true after the user acknowledges a destructive-statement
-   * warning (DELETE/UPDATE without WHERE, TRUNCATE). Without it the
-   * server returns a 409 with code "confirmation_required" so the UI
-   * can show a dialog first.
-   */
+  // See ExecuteResponse.NeedsConfirmation in internal/server/types.go
+  // for the confirmation handshake.
   confirmed?: boolean
 }
 
@@ -86,6 +82,9 @@ export interface ExecuteResponseBody {
   rows: unknown[][]
   updated: number
   durationMs: number
+  // See ExecuteResponse.NeedsConfirmation in internal/server/types.go.
+  needsConfirmation?: boolean
+  confirmReason?: string
 }
 
 export interface SchemaColumn {

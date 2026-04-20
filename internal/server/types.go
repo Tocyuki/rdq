@@ -76,12 +76,7 @@ type DatabasesDTO struct {
 // ExecuteRequest is the JSON body of POST /api/execute. All four connection
 // fields are required because the server is stateless — it does not assume
 // the session store has the right values at the moment the request arrives.
-//
-// Confirmed is set by the SPA / TUI after the user has acknowledged a
-// destructive-statement warning (DELETE / UPDATE without WHERE, TRUNCATE).
-// The handler rejects such statements with errCodeConfirmationRequired
-// when Confirmed is false; the UI then prompts and retries with
-// Confirmed=true.
+// See ExecuteResponse.NeedsConfirmation for the Confirmed handshake.
 type ExecuteRequest struct {
 	Profile   string `json:"profile"`
 	Cluster   string `json:"cluster"`
@@ -94,11 +89,21 @@ type ExecuteRequest struct {
 // ExecuteResponse is the JSON body returned by POST /api/execute. Rows is a
 // [][]any so SELECT output preserves native Go types (int64/float64/bool/
 // []byte-as-base64/null) through JSON marshaling.
+//
+// NeedsConfirmation signals that the statement is destructive (DELETE /
+// UPDATE without WHERE, TRUNCATE) and the client must re-send with
+// Confirmed=true. It travels on a 200 response rather than a 4xx so
+// access logs and error metrics stay clean for a normal user flow;
+// Columns / Rows / Updated / DurationMS are zero values in that branch
+// and must be ignored — no execution happened.
 type ExecuteResponse struct {
 	Columns    []string `json:"columns"`
 	Rows       [][]any  `json:"rows"`
 	Updated    int64    `json:"updated"`
 	DurationMS int64    `json:"durationMs"`
+
+	NeedsConfirmation bool   `json:"needsConfirmation,omitempty"`
+	ConfirmReason     string `json:"confirmReason,omitempty"`
 }
 
 // SchemaColumnDTO is one row from information_schema.columns.

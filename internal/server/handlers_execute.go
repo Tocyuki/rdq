@@ -85,13 +85,19 @@ func (h *executeHandlers) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Destructive-statement gate — see runner.NeedsConfirmation for the
+	// Destructive-statement gate — see ExecuteResponse.NeedsConfirmation
+	// for the 200-not-4xx contract, and runner.NeedsConfirmation for the
 	// classification rules. Unconfirmed attempts are deliberately NOT
-	// recorded in history: the statement has not been tried in earnest
-	// and recording would clutter the picker with cancelled prompts.
+	// recorded in history so the picker does not fill with cancelled
+	// prompts.
 	if !req.Confirmed {
 		if need, reason := runner.NeedsConfirmation(req.SQL); need {
-			writeJSONError(w, http.StatusConflict, errCodeConfirmationRequired, reason)
+			writeJSON(w, ExecuteResponse{
+				Columns:           []string{},
+				Rows:              [][]any{},
+				NeedsConfirmation: true,
+				ConfirmReason:     reason,
+			})
 			return
 		}
 	}

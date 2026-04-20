@@ -286,15 +286,21 @@ func TestExecuteRejectsDestructiveWithoutConfirmation(t *testing.T) {
 		Profile: "dev", Cluster: "arn:c", Secret: "arn:s", Database: "app",
 		SQL: "DELETE FROM users",
 	})
-	if rr.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409 (needs confirmation): %s", rr.Code, rr.Body.String())
+	// Confirmation required is a normal control-flow step, not an error:
+	// 200 with NeedsConfirmation=true keeps access logs / error metrics
+	// clean while still signalling the UI to prompt.
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (needs confirmation flag): %s", rr.Code, rr.Body.String())
 	}
-	var body ErrorDTO
+	var body ExecuteResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Error.Code != errCodeConfirmationRequired {
-		t.Errorf("code = %s, want %s", body.Error.Code, errCodeConfirmationRequired)
+	if !body.NeedsConfirmation {
+		t.Errorf("NeedsConfirmation = false, want true: %s", rr.Body.String())
+	}
+	if body.ConfirmReason == "" {
+		t.Errorf("ConfirmReason is empty; UI needs a sentence to display")
 	}
 	// Unconfirmed attempts should NOT clutter history.
 	if _, err := os.Stat(histPath); err == nil {

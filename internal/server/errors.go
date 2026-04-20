@@ -14,8 +14,7 @@ const (
 	errCodeTimeout      = "timeout"
 	errCodeAWSError     = "aws_error"
 	errCodeInternal     = "internal"
-	errCodeReadOnly             = "read_only"
-	errCodeConfirmationRequired = "confirmation_required"
+	errCodeReadOnly = "read_only"
 )
 
 // writeJSONError serializes an ErrorDTO with the given status, code, and
