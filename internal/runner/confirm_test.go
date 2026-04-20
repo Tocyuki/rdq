@@ -85,4 +85,3 @@ func TestStripSQLNoise(t *testing.T) {
 		})
 	}
 }
-

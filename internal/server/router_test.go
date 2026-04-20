@@ -14,8 +14,8 @@ import (
 // build output shipped via //go:embed.
 func routerTestFS() fs.FS {
 	return fstest.MapFS{
-		"index.html":      {Data: []byte("<!doctype html><html><body>rdq</body></html>")},
-		"assets/app.js":   {Data: []byte("console.log('rdq')")},
+		"index.html":    {Data: []byte("<!doctype html><html><body>rdq</body></html>")},
+		"assets/app.js": {Data: []byte("console.log('rdq')")},
 	}
 }
 

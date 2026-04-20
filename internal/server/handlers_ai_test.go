@@ -18,14 +18,14 @@ import (
 // used by the AI handler tests. Each method returns the canned value unless
 // the corresponding err is non-nil.
 type fakeBedrock struct {
-	models         []bedrock.ModelInfo
-	askReply       string
-	explainReply   string
-	listErr        error
-	askErr         error
-	explainErr     error
-	seenSystem     string
-	seenMessages   []bedrock.Message
+	models       []bedrock.ModelInfo
+	askReply     string
+	explainReply string
+	listErr      error
+	askErr       error
+	explainErr   error
+	seenSystem   string
+	seenMessages []bedrock.Message
 }
 
 func (f *fakeBedrock) ListModels(_ context.Context) ([]bedrock.ModelInfo, error) {
