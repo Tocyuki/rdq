@@ -10,6 +10,7 @@ import (
 	"github.com/Tocyuki/rdq/internal/bedrock"
 	"github.com/Tocyuki/rdq/internal/connection"
 	"github.com/Tocyuki/rdq/internal/history"
+	"github.com/Tocyuki/rdq/internal/runner"
 	"github.com/Tocyuki/rdq/internal/schema"
 	"github.com/Tocyuki/rdq/internal/state"
 	"github.com/atotto/clipboard"
@@ -24,6 +25,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -232,6 +234,22 @@ type Model struct {
 	productionList       list.Model
 	productionPromptOpen bool
 
+	// Read-only mode flag. When true (the default when the profile has
+	// no stored answer) runStatement rejects any non-SELECT statement
+	// via runner.IsReadOnlySQL before touching the Data API. Toggleable
+	// via F8; hydrated from state.ProfileState.IsReadOnly on startup
+	// and after every profile switch.
+	isReadOnly bool
+
+	// Confirm-run prompt state. When F5/^R lands on a destructive
+	// statement (DELETE/UPDATE without WHERE or TRUNCATE) we stash the
+	// exact SQL and a human reason so the prompt renderer can echo them
+	// back. `pendingConfirmSQL != ""` is the single source of truth for
+	// "prompt is open" — avoid adding a parallel bool that has to stay
+	// in sync.
+	confirmRunReason  string
+	pendingConfirmSQL string
+
 	// Transient status message (e.g. CSV export confirmation, yy yank).
 	// flashToken is bumped every time flashMessage is set so a tea.Tick
 	// auto-clear can ignore stale ticks for messages that have already
@@ -282,7 +300,7 @@ func (i historyItem) Description() string {
 // fits on one line in the picker.
 func summarizeSQL(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
-	return truncate(s, 80)
+	return runner.Truncate(s, 80)
 }
 
 // newModel constructs an initialized Model. It does not perform any I/O; the
@@ -453,6 +471,7 @@ func newModel(client *rdsdata.Client, tgt target, store *history.Store, bedrockC
 	if answered := m.loadProductionFlag(); !answered {
 		m.openProductionPrompt()
 	}
+	m.loadReadOnlyFlag()
 	return m
 }
 
@@ -501,7 +520,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.lastErr = nil
 			m.result = msg.Result
-			m.jsonRaw = msg.Result.toJSON()
+			m.jsonRaw = msg.Result.ToJSON()
 			m.jsonText = m.jsonRaw
 			m.colCursor = 0
 			// clearSearch wipes any previous query + hit state and
@@ -674,6 +693,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.updateDatabasePicker(msg))
 		case m.productionPromptOpen:
 			cmds = append(cmds, m.updateProductionPrompt(msg))
+		case m.pendingConfirmSQL != "":
+			cmds = append(cmds, m.updateConfirmRunPrompt(msg))
 		case m.modelPickerOpen:
 			cmds = append(cmds, m.updateModelPicker(msg))
 		case m.languagePickerOpen:
@@ -727,13 +748,17 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return tea.Quit, true
 
 	case key.Matches(msg, m.keys.Run):
-		if m.executing {
+		if m.executing || m.pendingConfirmSQL != "" {
 			return nil, true
 		}
-		m.executing = true
-		m.lastErr = nil
-		m.flashMessage = ""
-		return tea.Batch(m.spin.Tick, runStatement(m.client, m.target, m.editor.Value())), true
+		sql := m.editor.Value()
+		if need, reason := runner.NeedsConfirmation(sql); need {
+			m.confirmRunReason = reason
+			m.pendingConfirmSQL = sql
+			m.flashMessage = ""
+			return nil, true
+		}
+		return m.startRun(sql), true
 
 	case key.Matches(msg, m.keys.Focus):
 		m.toggleFocus()
@@ -812,6 +837,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.openProductionPrompt()
 		return nil, true
 
+	case key.Matches(msg, m.keys.ToggleReadOnly):
+		return m.toggleReadOnly(), true
+
 	case key.Matches(msg, m.keys.ExportCSV):
 		m.handleExportCSV()
 		return nil, true
@@ -853,7 +881,7 @@ func (m *Model) openInspector(idx int) {
 	if m.result == nil || idx < 0 || idx >= len(m.result.Rows) {
 		return
 	}
-	out, err := m.result.rowJSON(idx)
+	out, err := m.result.RowJSON(idx)
 	if err != nil {
 		m.lastErr = fmt.Errorf("inspect row: %w", err)
 		return
@@ -891,7 +919,7 @@ func (m *Model) handleExportCSV() {
 		m.flashMessage = ""
 		return
 	}
-	path, err := m.result.exportCSV()
+	path, err := m.result.ExportCSV()
 	if err != nil {
 		m.lastErr = fmt.Errorf("export failed: %w", err)
 		m.flashMessage = ""
@@ -1374,7 +1402,7 @@ func (m *Model) refreshTable() {
 		row := make(table.Row, len(visible))
 		for j := range visible {
 			absoluteCol := start + j
-			w := columnWidthCap
+			w := runner.ColumnWidthCap
 			if absoluteCol < len(widths) {
 				w = widths[absoluteCol]
 			}
@@ -1382,7 +1410,7 @@ func (m *Model) refreshTable() {
 			if absoluteCol < len(r) {
 				cell = r[absoluteCol]
 			}
-			shown := truncate(formatCell(cell), w)
+			shown := runner.Truncate(runner.FormatCell(cell), w)
 			if m.searchQuery != "" {
 				shown = highlightCell(shown, m.searchQuery, curHit, i, absoluteCol)
 			}
@@ -1529,6 +1557,21 @@ func (m Model) View() string {
 		}, "\n")
 	}
 
+	if m.pendingConfirmSQL != "" {
+		// Destructive-statement warning: reason + staged SQL preview +
+		// keybinding hint. errorStyle paints the banner red.
+		banner := errorStyle.Render("⚠  " + m.confirmRunReason)
+		preview := jsonStyle.Render(m.pendingConfirmSQL)
+		hint := helpStyle.Render("enter / y = run anyway   ·   esc / n = cancel")
+		return strings.Join([]string{
+			status,
+			banner,
+			preview,
+			hint,
+			helpBarStyle.Render(helpLine),
+		}, "\n")
+	}
+
 	if m.askOpen {
 		// While the natural-language input is open the global keymap is
 		// inert (only Enter/Esc are routed). Replace the help bar with a
@@ -1598,7 +1641,18 @@ func (m Model) renderStatus() string {
 		keyStyle.Render("model"),
 		m.formatModelStatus(),
 	)
-	body := statusStyle.Render(line1 + "\n" + line2 + "\n" + line3 + "\n" + line4)
+	// A 5th line surfaces the read-only flag so users can see at a
+	// glance whether writes will be blocked. "OFF" is rendered muted so
+	// the line is unobtrusive when the guard is intentionally disabled.
+	readOnlyLabel := keyStyle.Render("writes")
+	var readOnlyValue string
+	if m.isReadOnly {
+		readOnlyValue = "🔒 read-only (F8 to allow)"
+	} else {
+		readOnlyValue = helpStyle.Render("allowed (F8 to lock)")
+	}
+	line5 := fmt.Sprintf("%s %s", readOnlyLabel, readOnlyValue)
+	body := statusStyle.Render(line1 + "\n" + line2 + "\n" + line3 + "\n" + line4 + "\n" + line5)
 
 	if m.isProduction {
 		// The banner stretches across the full inner width so it can
@@ -2067,7 +2121,7 @@ func (m *Model) openAnalyzePrompt() tea.Cmd {
 		return nil
 	}
 	var sb strings.Builder
-	if err := m.result.writeCSV(&sb); err != nil {
+	if err := m.result.WriteCSV(&sb); err != nil {
 		m.lastErr = fmt.Errorf("encode result for analysis: %w", err)
 		return nil
 	}
@@ -2173,11 +2227,35 @@ func composeAnalyzeText(analysis string) string {
 // editor while the review markdown sits inert behind it.
 func (m *Model) showAIOverlay(text string) {
 	m.explainText = text
-	m.explainVP.SetContent(text)
+	m.explainVP.SetContent(renderMarkdownForTerminal(text, m.explainVP.Width))
 	m.explainVP.GotoTop()
 	m.explainVP.SetXOffset(0)
 	m.explainOpen = true
 	m.pinResultsFocus()
+}
+
+// renderMarkdownForTerminal turns the AI-produced markdown into an
+// ANSI-styled blob for the viewport. Falls back to the raw text if
+// glamour fails (unknown width, render error) so the overlay always
+// displays *something* rather than blank. width ≤ 0 means "unknown
+// viewport size"; we pick a conservative default in that case so the
+// output does not word-wrap at zero columns.
+func renderMarkdownForTerminal(markdown string, width int) string {
+	if width <= 0 {
+		width = 100
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return markdown
+	}
+	out, err := r.Render(markdown)
+	if err != nil {
+		return markdown
+	}
+	return out
 }
 
 // composeExplainText assembles the final markdown shown in the explain
@@ -2260,7 +2338,7 @@ func (m *Model) yankPayload() (string, string, error) {
 		if m.result == nil {
 			return "", "", fmt.Errorf("nothing to copy")
 		}
-		row, err := m.result.rowJSON(m.inspectedRow)
+		row, err := m.result.RowJSON(m.inspectedRow)
 		if err != nil {
 			return "", "", fmt.Errorf("copy row: %w", err)
 		}
@@ -2269,7 +2347,7 @@ func (m *Model) yankPayload() (string, string, error) {
 		return m.jsonText, "result JSON", nil
 	case m.result != nil:
 		var sb strings.Builder
-		if err := m.result.writeCSV(&sb); err != nil {
+		if err := m.result.WriteCSV(&sb); err != nil {
 			return "", "", fmt.Errorf("copy table: %w", err)
 		}
 		return sb.String(), "result CSV", nil
@@ -2472,7 +2550,7 @@ func (m Model) canExplainError() bool {
 	if m.lastErr == nil || m.bedrockClient == nil {
 		return false
 	}
-	if _, ok := m.lastErr.(errEmptySQLValue); ok {
+	if errors.Is(m.lastErr, runner.ErrEmptySQL) {
 		return false
 	}
 	if m.explainExecuting {
@@ -2745,6 +2823,7 @@ func (m *Model) applyProfileSwitch(profile string, cfg aws.Config) tea.Cmd {
 	// classified the picker opens automatically before any query can
 	// run.
 	answered := m.loadProductionFlag()
+	m.loadReadOnlyFlag()
 	m.layout()
 	if !answered {
 		m.openProductionPrompt()
@@ -3227,6 +3306,96 @@ func (m *Model) persistBedrockSettings() error {
 	ps.BedrockLanguage = m.bedrockLanguage
 	st.Set(m.target.profile, ps)
 	return st.Save()
+}
+
+// loadReadOnlyFlag hydrates m.isReadOnly from state.json for the active
+// profile. The flag defaults to ON when the profile has never been
+// answered (nil in state) or when we cannot read state — the same
+// "safe-by-default" stance the GUI execute handler takes. Ephemeral
+// mode (empty profile name) is also treated as read-only.
+func (m *Model) loadReadOnlyFlag() {
+	if m.target.profile == "" {
+		m.isReadOnly = true
+		return
+	}
+	st, err := state.Load()
+	if err != nil {
+		m.isReadOnly = true
+		return
+	}
+	ps := st.Get(m.target.profile)
+	if ps.IsReadOnly == nil {
+		m.isReadOnly = true
+		return
+	}
+	m.isReadOnly = *ps.IsReadOnly
+}
+
+// toggleReadOnly flips the read-only flag, persists the new value, and
+// flashes a status message. F8 binds here so users can switch between
+// "writes blocked" and "writes allowed" without leaving the TUI.
+// Unlike F7's Yes/No picker this is a direct two-state toggle because
+// the flag is a binary safety valve; the tri-state "unanswered" only
+// exists on disk as a default-safe placeholder.
+func (m *Model) toggleReadOnly() tea.Cmd {
+	m.isReadOnly = !m.isReadOnly
+	if err := m.persistIsReadOnly(m.isReadOnly); err != nil {
+		log.Printf("save is_read_only failed: %v", err)
+	}
+	if m.isReadOnly {
+		m.flashMessage = "🔒 read-only mode ON (writes blocked)"
+	} else {
+		m.flashMessage = "read-only mode OFF (writes allowed)"
+	}
+	return m.scheduleFlashClear()
+}
+
+// persistIsReadOnly writes IsReadOnly to the profile's state.json entry.
+// Ephemeral runs (empty profile) are a no-op — direct credentials do
+// not touch state at all.
+func (m *Model) persistIsReadOnly(value bool) error {
+	if m.target.profile == "" {
+		return nil
+	}
+	st, err := state.Load()
+	if err != nil {
+		return err
+	}
+	ps := st.Get(m.target.profile)
+	v := value
+	ps.IsReadOnly = &v
+	st.Set(m.target.profile, ps)
+	return st.Save()
+}
+
+// startRun is the common execution kickoff called by both the direct
+// F5/^R path and the post-confirmation path. It flips the spinner state
+// and dispatches runStatement in a single tea.Cmd.
+func (m *Model) startRun(sql string) tea.Cmd {
+	m.executing = true
+	m.lastErr = nil
+	m.flashMessage = ""
+	return tea.Batch(m.spin.Tick, runStatement(m.client, m.target, sql, m.isReadOnly))
+}
+
+// updateConfirmRunPrompt handles input while the destructive-statement
+// confirmation banner is up. Enter / y runs the staged SQL; Esc / n /
+// Ctrl+C cancels. Any other key is swallowed so the prompt stays modal
+// and the editor does not accidentally receive keystrokes.
+func (m *Model) updateConfirmRunPrompt(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter", "y", "Y":
+		sql := m.pendingConfirmSQL
+		m.confirmRunReason = ""
+		m.pendingConfirmSQL = ""
+		return m.startRun(sql)
+	case "esc", "n", "N", "ctrl+c":
+		m.confirmRunReason = ""
+		m.pendingConfirmSQL = ""
+		m.flashMessage = "run cancelled"
+		return m.scheduleFlashClear()
+	}
+	return nil
 }
 
 // applyAskResult replaces the editor's contents with the AI-generated SQL,

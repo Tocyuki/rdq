@@ -1,7 +1,11 @@
-package tui
+package runner
 
 import (
+	"bytes"
+	"encoding/csv"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -59,9 +63,9 @@ func TestFormatCell(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := formatCell(tc.in)
+			got := FormatCell(tc.in)
 			if got != tc.want {
-				t.Errorf("formatCell(%#v) = %q, want %q", tc.in, got, tc.want)
+				t.Errorf("FormatCell(%#v) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -109,7 +113,7 @@ func TestConvertResult(t *testing.T) {
 		},
 	}
 
-	got := convertResult(out)
+	got := ConvertResult(out)
 	wantCols := []string{"id", "name", "active"}
 	if !reflect.DeepEqual(got.Columns, wantCols) {
 		t.Errorf("columns = %v, want %v", got.Columns, wantCols)
@@ -137,7 +141,7 @@ func TestConvertResultRowShorterThanColumns(t *testing.T) {
 			},
 		},
 	}
-	got := convertResult(out)
+	got := ConvertResult(out)
 	if len(got.Rows) != 1 || len(got.Rows[0]) != 3 {
 		t.Fatalf("expected 1 row of 3 cells, got %+v", got.Rows)
 	}
@@ -159,7 +163,7 @@ func TestConvertResultRowLongerThanColumns(t *testing.T) {
 			},
 		},
 	}
-	got := convertResult(out)
+	got := ConvertResult(out)
 	if len(got.Rows) != 1 || len(got.Rows[0]) != 1 {
 		t.Fatalf("expected 1 row truncated to 1 cell, got %+v", got.Rows)
 	}
@@ -169,9 +173,9 @@ func TestConvertResultRowLongerThanColumns(t *testing.T) {
 }
 
 func TestConvertResultNil(t *testing.T) {
-	got := convertResult(nil)
+	got := ConvertResult(nil)
 	if got == nil {
-		t.Fatal("expected empty queryResult, got nil")
+		t.Fatal("expected empty Result, got nil")
 	}
 	if len(got.Columns) != 0 || len(got.Rows) != 0 {
 		t.Errorf("expected empty result, got %+v", got)
@@ -184,7 +188,7 @@ func TestColumnWidths(t *testing.T) {
 		{int64(1), "short", "a"},
 		{int64(99), "this is a much longer value", "bb"},
 	}
-	got := columnWidths(cols, rows)
+	got := ColumnWidths(cols, rows)
 	want := []int{2, 27, 2}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("widths = %v, want %v", got, want)
@@ -196,9 +200,9 @@ func TestColumnWidthsCap(t *testing.T) {
 	rows := [][]any{
 		{"this string is way longer than the forty character cap"},
 	}
-	got := columnWidths(cols, rows)
-	if got[0] != columnWidthCap {
-		t.Errorf("width capped to %d, got %d", columnWidthCap, got[0])
+	got := ColumnWidths(cols, rows)
+	if got[0] != ColumnWidthCap {
+		t.Errorf("width capped to %d, got %d", ColumnWidthCap, got[0])
 	}
 }
 
@@ -215,22 +219,22 @@ func TestTruncate(t *testing.T) {
 		{"hello", 0, ""},
 	}
 	for _, tc := range cases {
-		got := truncate(tc.s, tc.width)
+		got := Truncate(tc.s, tc.width)
 		if got != tc.want {
-			t.Errorf("truncate(%q, %d) = %q, want %q", tc.s, tc.width, got, tc.want)
+			t.Errorf("Truncate(%q, %d) = %q, want %q", tc.s, tc.width, got, tc.want)
 		}
 	}
 }
 
-func TestQueryResultToJSONPreservesTypes(t *testing.T) {
-	r := &queryResult{
+func TestResultToJSONPreservesTypes(t *testing.T) {
+	r := &Result{
 		Columns: []string{"id", "name", "active", "score", "missing"},
 		Rows: [][]any{
 			{int64(1), "alice", true, 3.14, nil},
 			{int64(2), "bob", false, 2.5, nil},
 		},
 	}
-	out := r.toJSON()
+	out := r.ToJSON()
 
 	var decoded []map[string]any
 	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
@@ -260,19 +264,17 @@ func TestQueryResultToJSONPreservesTypes(t *testing.T) {
 }
 
 func TestRowJSONPreservesColumnOrder(t *testing.T) {
-	r := &queryResult{
+	r := &Result{
 		Columns: []string{"zeta", "alpha", "mike"},
 		Rows: [][]any{
 			{int64(1), "first", true},
 			{int64(2), "second", false},
 		},
 	}
-	got, err := r.rowJSON(0)
+	got, err := r.RowJSON(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The raw output must keep the original column order; map serialization
-	// would have alphabetized to alpha/mike/zeta.
 	if !strings.Contains(got, "\"zeta\": 1") {
 		t.Errorf("expected zeta first, got:\n%s", got)
 	}
@@ -286,7 +288,6 @@ func TestRowJSONPreservesColumnOrder(t *testing.T) {
 		t.Errorf("column order not preserved:\n%s", got)
 	}
 
-	// Round-trip parse to confirm valid JSON and value types.
 	var decoded map[string]any
 	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, got)
@@ -300,11 +301,11 @@ func TestRowJSONPreservesColumnOrder(t *testing.T) {
 }
 
 func TestRowJSONHandlesNullsAndBlobs(t *testing.T) {
-	r := &queryResult{
+	r := &Result{
 		Columns: []string{"id", "data", "missing"},
 		Rows:    [][]any{{int64(7), []byte("hi"), nil}},
 	}
-	got, err := r.rowJSON(0)
+	got, err := r.RowJSON(0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,29 +322,171 @@ func TestRowJSONHandlesNullsAndBlobs(t *testing.T) {
 }
 
 func TestRowJSONOutOfRange(t *testing.T) {
-	r := &queryResult{Columns: []string{"id"}, Rows: [][]any{{int64(1)}}}
+	r := &Result{Columns: []string{"id"}, Rows: [][]any{{int64(1)}}}
 	cases := []int{-1, 1, 99}
 	for _, idx := range cases {
-		if _, err := r.rowJSON(idx); err == nil {
+		if _, err := r.RowJSON(idx); err == nil {
 			t.Errorf("expected error for index %d, got nil", idx)
 		}
 	}
 }
 
-func TestQueryResultToJSONBlobBase64(t *testing.T) {
-	r := &queryResult{
+func TestResultToJSONBlobBase64(t *testing.T) {
+	r := &Result{
 		Columns: []string{"data"},
 		Rows: [][]any{
 			{[]byte("hello")},
 		},
 	}
-	out := r.toJSON()
+	out := r.ToJSON()
 	var decoded []map[string]any
 	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, out)
 	}
-	// encoding/json marshals []byte as standard base64.
 	if got, _ := decoded[0]["data"].(string); got != "aGVsbG8=" {
 		t.Errorf("expected base64 \"aGVsbG8=\", got %#v", decoded[0]["data"])
+	}
+}
+
+func TestFormatCSVCell(t *testing.T) {
+	cases := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{"nil is empty", nil, ""},
+		{"string", "alice", "alice"},
+		{"int64", int64(42), "42"},
+		{"float64", 3.14, "3.14"},
+		{"bool true", true, "true"},
+		{"bool false", false, "false"},
+		{"blob base64", []byte("hello"), "aGVsbG8="},
+		{"empty array", []any{}, "[]"},
+		{"int array", []any{int64(1), int64(2)}, "[1, 2]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatCSVCell(tc.in)
+			if got != tc.want {
+				t.Errorf("formatCSVCell(%#v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWriteCSVRoundTrip(t *testing.T) {
+	r := &Result{
+		Columns: []string{"id", "name", "active", "score", "missing"},
+		Rows: [][]any{
+			{int64(1), "alice", true, 3.14, nil},
+			{int64(2), "bob, jr", false, 2.5, nil},
+			{int64(3), "with\nnewline", true, 0.0, nil},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := r.WriteCSV(&buf); err != nil {
+		t.Fatalf("WriteCSV: %v", err)
+	}
+
+	reader := csv.NewReader(&buf)
+	records, err := reader.ReadAll()
+	if err != nil {
+		t.Fatalf("csv read: %v", err)
+	}
+	if len(records) != 4 {
+		t.Fatalf("expected 4 records (header + 3 rows), got %d", len(records))
+	}
+
+	wantHeader := []string{"id", "name", "active", "score", "missing"}
+	if !reflect.DeepEqual(records[0], wantHeader) {
+		t.Errorf("header = %v, want %v", records[0], wantHeader)
+	}
+
+	wantRow1 := []string{"1", "alice", "true", "3.14", ""}
+	if !reflect.DeepEqual(records[1], wantRow1) {
+		t.Errorf("row 1 = %v, want %v", records[1], wantRow1)
+	}
+
+	if records[2][1] != "bob, jr" {
+		t.Errorf("expected quoted comma to round-trip, got %q", records[2][1])
+	}
+
+	if records[3][1] != "with\nnewline" {
+		t.Errorf("expected newline to round-trip, got %q", records[3][1])
+	}
+}
+
+func TestWriteCSVNilResult(t *testing.T) {
+	var r *Result
+	var buf bytes.Buffer
+	if err := r.WriteCSV(&buf); err != nil {
+		t.Errorf("expected nil error for nil result, got %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected empty output, got %q", buf.String())
+	}
+}
+
+func TestExportCSVCreatesFile(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(old) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &Result{
+		Columns: []string{"id"},
+		Rows:    [][]any{{int64(1)}, {int64(2)}},
+	}
+	path, err := r.ExportCSV()
+	if err != nil {
+		t.Fatalf("ExportCSV: %v", err)
+	}
+	gotDir, _ := filepath.EvalSymlinks(filepath.Dir(path))
+	wantDir, _ := filepath.EvalSymlinks(dir)
+	if gotDir != wantDir {
+		t.Errorf("expected file in %s, got %s", wantDir, gotDir)
+	}
+	if !strings.HasPrefix(filepath.Base(path), "rdq-") || !strings.HasSuffix(path, ".csv") {
+		t.Errorf("unexpected filename: %s", path)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "id\n1\n2\n") {
+		t.Errorf("unexpected file contents:\n%s", data)
+	}
+}
+
+func TestExportCSVNoResult(t *testing.T) {
+	r := &Result{}
+	if _, err := r.ExportCSV(); err == nil {
+		t.Error("expected error for empty result, got nil")
+	}
+}
+
+func TestExportCSVCollisionAddsSuffix(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(old) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &Result{Columns: []string{"id"}, Rows: [][]any{{int64(1)}}}
+	first, err := r.ExportCSV()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := r.ExportCSV()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Errorf("expected unique filenames, both = %s", first)
 	}
 }

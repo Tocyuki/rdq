@@ -15,6 +15,15 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    /* Path aliases — keep in sync with vite.config.ts. TS 6 requires the
+       ignoreDeprecations escape hatch to keep using baseUrl; dropping it
+       would mean rewriting every "@/..." import. */
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
     /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,

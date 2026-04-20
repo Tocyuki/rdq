@@ -1,9 +1,11 @@
 // Package history persists executed SQL statements as a per-line JSON log so
-// the TUI can recall them via an incremental search picker.
+// the TUI and GUI can recall them via an incremental search picker.
 //
 // The on-disk format is JSON Lines (one entry per line) at
 // ~/.rdq/history.jsonl, overridable via the RDQ_HISTORY_FILE env var. Append
-// is O(1); Load streams the whole file and filters in memory.
+// deduplicates: re-running a statement that already exists for the same
+// (profile, database) moves it to the tail with fresh metadata, preserving
+// the user's favourite star.
 package history
 
 import (
@@ -13,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -48,26 +51,39 @@ func New() (*Store, error) {
 // Path returns the resolved history file location.
 func (s *Store) Path() string { return s.path }
 
-// Append writes an entry as one JSON line. The file and parent directory are
-// created on demand.
+// Append writes an entry to the history file, deduplicating against any
+// prior entry with the same (Profile, Database, TrimSpace(SQL)). The stale
+// entry is removed and the new one takes its slot at the end of the file
+// so re-runs of an identical statement do not clutter the picker.
+//
+// `At`, `Ok`, `DurationMS`, and `ErrorMsg` always reflect the current run.
+// `Favorite` is inherited from the existing entry so the user's star
+// survives re-execution even if the caller passes `e.Favorite=false`.
+//
+// The implementation is O(n) on disk because the JSONL log is rewritten in
+// place (via the same tempfile+rename path SetFavorite uses). Histories
+// are typically small (< a few thousand lines) so the cost is negligible,
+// and the tradeoff buys simple in-order recall by Load.
 func (s *Store) Append(e Entry) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return fmt.Errorf("create history directory: %w", err)
-	}
-	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	existing, err := s.loadAll()
 	if err != nil {
-		return fmt.Errorf("open history file: %w", err)
+		return err
 	}
-	defer f.Close()
-
-	data, err := json.Marshal(e)
-	if err != nil {
-		return fmt.Errorf("marshal history entry: %w", err)
+	needle := strings.TrimSpace(e.SQL)
+	kept := make([]Entry, 0, len(existing)+1)
+	for _, old := range existing {
+		if old.Profile == e.Profile &&
+			old.Database == e.Database &&
+			strings.TrimSpace(old.SQL) == needle {
+			if old.Favorite {
+				e.Favorite = true
+			}
+			continue
+		}
+		kept = append(kept, old)
 	}
-	if _, err := f.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write history entry: %w", err)
-	}
-	return nil
+	kept = append(kept, e)
+	return s.rewriteAll(kept)
 }
 
 // Load returns entries matching the given profile and database, ordered with

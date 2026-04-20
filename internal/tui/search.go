@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"github.com/Tocyuki/rdq/internal/runner"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -53,7 +54,7 @@ func computeTableHits(result *queryResult, query string) []tableHit {
 			if c < len(row) {
 				cell = row[c]
 			}
-			text := formatCell(cell)
+			text := runner.FormatCell(cell)
 			lower := strings.ToLower(text)
 			start := 0
 			for {

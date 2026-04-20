@@ -9,6 +9,7 @@ import (
 
 	"github.com/Tocyuki/rdq/internal/bedrock"
 	"github.com/Tocyuki/rdq/internal/connection"
+	"github.com/Tocyuki/rdq/internal/runner"
 	"github.com/Tocyuki/rdq/internal/state"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/charmbracelet/bubbles/list"
@@ -346,7 +347,7 @@ func TestYankInspectorViaKeystrokes(t *testing.T) {
 	m.width, m.height = 100, 40
 	m.layout()
 	m.result = makeResult(2, 3)
-	m.jsonText = m.result.toJSON()
+	m.jsonText = m.result.ToJSON()
 	m.refreshTable()
 	m.focus = focusResults
 	m.table.Focus()
@@ -945,7 +946,7 @@ func TestTabIsBlockedWhileInspecting(t *testing.T) {
 func TestYankPayloadByContext(t *testing.T) {
 	m := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
 	m.result = makeResult(2, 3)
-	m.jsonText = m.result.toJSON()
+	m.jsonText = m.result.ToJSON()
 
 	// Table view (default mode after a successful execution).
 	m.mode = viewTable
@@ -1075,7 +1076,7 @@ func TestCanExplainError(t *testing.T) {
 	}{
 		{"no client", nil, errors.New("syntax"), false},
 		{"no error", bd, nil, false},
-		{"empty sql sentinel", bd, errEmptySQLValue{}, false},
+		{"empty sql sentinel", bd, runner.ErrEmptySQL, false},
 		{"real error", bd, errors.New("table not found"), true},
 	}
 	for _, tc := range cases {
@@ -1190,7 +1191,7 @@ func TestSearchOpenAndCommit(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.refreshJSON()
@@ -1238,7 +1239,7 @@ func TestSearchNextPrev(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.refreshJSON()
@@ -1288,7 +1289,7 @@ func TestSearchEscCancelsInput(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.focus = focusResults
@@ -1325,7 +1326,7 @@ func TestSearchExecuteMsgClears(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.searchQuery = "tokyo"
@@ -1353,7 +1354,7 @@ func TestSearchViewToggleResetsCursor(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.refreshJSON()
@@ -1388,7 +1389,7 @@ func TestSearchNoMatchesFlash(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.layout()
 	m.result = searchResult()
-	m.jsonRaw = m.result.toJSON()
+	m.jsonRaw = m.result.ToJSON()
 	m.jsonText = m.jsonRaw
 	m.refreshTable()
 	m.focus = focusResults
@@ -1764,5 +1765,117 @@ func TestProductionBannerInRenderStatus(t *testing.T) {
 	out = m.renderStatus()
 	if strings.Contains(out, "PRODUCTION") {
 		t.Errorf("PRODUCTION should not appear when flag is false:\n%s", out)
+	}
+}
+
+// TestLoadReadOnlyFlagDefaultsToTrue ensures profiles that have never
+// answered the question come up in read-only (safe) mode.
+func TestLoadReadOnlyFlagDefaultsToTrue(t *testing.T) {
+	m := setupProductionTest(t) // isolated RDQ_STATE_FILE + profile="testprofile"
+	m.loadReadOnlyFlag()
+	if !m.isReadOnly {
+		t.Errorf("expected isReadOnly=true when profile has no stored answer")
+	}
+}
+
+// TestToggleReadOnlyRoundTripsState walks the F8 toggle: the flag
+// flips in memory, state.json is updated, and a follow-up
+// loadReadOnlyFlag on a fresh Model recovers the persisted value.
+func TestToggleReadOnlyRoundTripsState(t *testing.T) {
+	m := setupProductionTest(t)
+	m.loadReadOnlyFlag()
+	if !m.isReadOnly {
+		t.Fatalf("precondition: expected default isReadOnly=true")
+	}
+
+	// Toggle off (allow writes).
+	if cmd := m.toggleReadOnly(); cmd == nil {
+		t.Error("toggleReadOnly should return a flash-clear cmd")
+	}
+	if m.isReadOnly {
+		t.Errorf("isReadOnly should be false after toggle")
+	}
+	if !strings.Contains(m.flashMessage, "OFF") {
+		t.Errorf("flash message should announce OFF, got %q", m.flashMessage)
+	}
+
+	// Reload on a fresh model — persisted value wins.
+	m2 := newModel(nil, target{profile: "testprofile"}, nil, nil, "", "", aws.Config{})
+	m2.loadReadOnlyFlag()
+	if m2.isReadOnly {
+		t.Errorf("expected persisted false to load as isReadOnly=false")
+	}
+
+	// Toggle back on.
+	m2.toggleReadOnly()
+	if !m2.isReadOnly {
+		t.Errorf("isReadOnly should be true again after second toggle")
+	}
+}
+
+// TestConfirmRunPromptGatesDestructiveStatements verifies that pressing
+// F5/^R on a DELETE without WHERE opens the confirmation prompt instead
+// of kicking off a run, and that cancel / confirm work as documented.
+func TestConfirmRunPromptGatesDestructiveStatements(t *testing.T) {
+	m := setupProductionTest(t)
+	m.productionPromptOpen = false
+	m.editor.SetValue("DELETE FROM users")
+
+	// F5 → should open the confirm prompt, NOT set executing=true.
+	var model tea.Model = m
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyF5})
+	m = model.(Model)
+	if !(m.pendingConfirmSQL != "") {
+		t.Fatalf("expected confirm prompt to open for DELETE without WHERE")
+	}
+	if m.executing {
+		t.Errorf("executing should stay false until the user confirms")
+	}
+	if !strings.Contains(m.confirmRunReason, "DELETE") {
+		t.Errorf("reason should mention DELETE, got %q", m.confirmRunReason)
+	}
+	if m.pendingConfirmSQL != "DELETE FROM users" {
+		t.Errorf("pendingConfirmSQL = %q, want the staged SQL", m.pendingConfirmSQL)
+	}
+
+	// Esc dismisses without running.
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = model.(Model)
+	if m.pendingConfirmSQL != "" {
+		t.Errorf("Esc should close the confirm prompt")
+	}
+	if m.executing {
+		t.Errorf("Esc must not start a run")
+	}
+
+	// Safe UPDATE with WHERE should bypass the gate.
+	m.editor.SetValue("UPDATE users SET x = 1 WHERE id = 1")
+	model = m
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyF5})
+	m = model.(Model)
+	if m.pendingConfirmSQL != "" {
+		t.Errorf("safe UPDATE should not trigger the confirm prompt")
+	}
+	if !m.executing {
+		t.Errorf("safe statement should kick off execution")
+	}
+}
+
+// TestReadOnlyIndicatorInRenderStatus confirms the 5th status line
+// flips between "🔒 read-only" and "allowed" depending on m.isReadOnly.
+func TestReadOnlyIndicatorInRenderStatus(t *testing.T) {
+	m := setupProductionTest(t)
+	m.productionPromptOpen = false
+
+	m.isReadOnly = true
+	out := m.renderStatus()
+	if !strings.Contains(out, "read-only") {
+		t.Errorf("read-only indicator missing when isReadOnly=true:\n%s", out)
+	}
+
+	m.isReadOnly = false
+	out = m.renderStatus()
+	if !strings.Contains(out, "allowed") {
+		t.Errorf("\"allowed\" indicator missing when isReadOnly=false:\n%s", out)
 	}
 }

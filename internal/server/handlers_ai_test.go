@@ -1,0 +1,205 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/Tocyuki/rdq/internal/bedrock"
+	"github.com/Tocyuki/rdq/internal/schema"
+	"github.com/aws/aws-sdk-go-v2/aws"
+)
+
+// fakeBedrock is a minimal implementation of the bedrockClient interface
+// used by the AI handler tests. Each method returns the canned value unless
+// the corresponding err is non-nil.
+type fakeBedrock struct {
+	models       []bedrock.ModelInfo
+	askReply     string
+	explainReply string
+	listErr      error
+	askErr       error
+	explainErr   error
+	seenSystem   string
+	seenMessages []bedrock.Message
+}
+
+func (f *fakeBedrock) ListModels(_ context.Context) ([]bedrock.ModelInfo, error) {
+	return f.models, f.listErr
+}
+func (f *fakeBedrock) Ask(_ context.Context, _, systemPrompt string, messages []bedrock.Message) (string, error) {
+	f.seenSystem = systemPrompt
+	f.seenMessages = messages
+	return f.askReply, f.askErr
+}
+func (f *fakeBedrock) Explain(_ context.Context, _, systemPrompt string, messages []bedrock.Message) (string, error) {
+	f.seenSystem = systemPrompt
+	f.seenMessages = messages
+	return f.explainReply, f.explainErr
+}
+
+func newTestAIHandlers(fake *fakeBedrock) *aiHandlers {
+	c := newAWSCache()
+	c.loader = func(_ context.Context, _ string) (aws.Config, error) { return aws.Config{}, nil }
+	h := newAIHandlers(c)
+	h.newClient = func(_ aws.Config) bedrockClient { return fake }
+	h.loadSchema = func(_, _ string) (*schema.Snapshot, error) { return nil, nil }
+	return h
+}
+
+func TestAIModelsHappyPath(t *testing.T) {
+	fake := &fakeBedrock{models: []bedrock.ModelInfo{{ID: "anthropic.claude", Name: "Claude", Description: "LLM"}}}
+	h := newTestAIHandlers(fake)
+	req := httptest.NewRequest(http.MethodGet, "/api/ai/models?profile=dev", nil)
+	rr := httptest.NewRecorder()
+	h.models(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var body ModelsDTO
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Models) != 1 || body.Models[0].ID != "anthropic.claude" {
+		t.Errorf("unexpected models: %+v", body.Models)
+	}
+}
+
+func TestAIModelsRequiresProfile(t *testing.T) {
+	h := newTestAIHandlers(&fakeBedrock{})
+	req := httptest.NewRequest(http.MethodGet, "/api/ai/models", nil)
+	rr := httptest.NewRecorder()
+	h.models(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", rr.Code)
+	}
+}
+
+func TestAIAskPassesSystemPromptAndMessages(t *testing.T) {
+	fake := &fakeBedrock{askReply: "SELECT 1;"}
+	h := newTestAIHandlers(fake)
+	payload := AskRequest{
+		aiRequestBase: aiRequestBase{
+			Profile: "dev", Cluster: "arn:c", Database: "app", ModelID: "m", Language: "Japanese",
+		},
+		Messages: []MessageDTO{{Role: "user", Text: "count users"}},
+	}
+	buf, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/ask", strings.NewReader(string(buf)))
+	rr := httptest.NewRecorder()
+	h.ask(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var body AskResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.SQL != "SELECT 1;" {
+		t.Errorf("sql = %q", body.SQL)
+	}
+	if !strings.Contains(fake.seenSystem, "app") {
+		t.Errorf("expected system prompt to include database, got %s", fake.seenSystem)
+	}
+	if len(fake.seenMessages) != 1 || fake.seenMessages[0].Role != bedrock.RoleUser {
+		t.Errorf("unexpected messages forwarded: %+v", fake.seenMessages)
+	}
+}
+
+func TestAIAskRequiresNonEmptyMessages(t *testing.T) {
+	h := newTestAIHandlers(&fakeBedrock{})
+	payload := AskRequest{aiRequestBase: aiRequestBase{Profile: "dev", Database: "app", ModelID: "m"}}
+	buf, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/ask", strings.NewReader(string(buf)))
+	rr := httptest.NewRecorder()
+	h.ask(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestAIExplain(t *testing.T) {
+	fake := &fakeBedrock{explainReply: "the table is missing a column"}
+	h := newTestAIHandlers(fake)
+	payload := ExplainRequest{
+		aiRequestBase: aiRequestBase{Profile: "dev", Database: "app", ModelID: "m"},
+		SQL:           "SELECT * FROM t",
+		ErrorMsg:      "column does not exist",
+	}
+	buf, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/explain", strings.NewReader(string(buf)))
+	rr := httptest.NewRecorder()
+	h.explain(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var body TextResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Text != "the table is missing a column" {
+		t.Errorf("text = %q", body.Text)
+	}
+}
+
+func TestAIReviewRequiresSQL(t *testing.T) {
+	h := newTestAIHandlers(&fakeBedrock{})
+	payload := ReviewRequest{aiRequestBase: aiRequestBase{Profile: "dev", Database: "app", ModelID: "m"}}
+	buf, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/review", strings.NewReader(string(buf)))
+	rr := httptest.NewRecorder()
+	h.review(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestAIAnalyzeRequiresSQLAndResultBlob(t *testing.T) {
+	h := newTestAIHandlers(&fakeBedrock{})
+	payload := AnalyzeRequest{
+		aiRequestBase: aiRequestBase{Profile: "dev", Database: "app", ModelID: "m"},
+		SQL:           "SELECT 1",
+	}
+	buf, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/analyze", strings.NewReader(string(buf)))
+	rr := httptest.NewRecorder()
+	h.analyze(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (resultBlob missing)", rr.Code)
+	}
+}
+
+func TestAIMapsErrorsTo502(t *testing.T) {
+	fake := &fakeBedrock{askErr: errors.New("Bedrock throttled")}
+	h := newTestAIHandlers(fake)
+	payload := AskRequest{
+		aiRequestBase: aiRequestBase{Profile: "dev", Database: "app", ModelID: "m"},
+		Messages:      []MessageDTO{{Role: "user", Text: "hi"}},
+	}
+	buf, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/ask", strings.NewReader(string(buf)))
+	rr := httptest.NewRecorder()
+	h.ask(rr, req)
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rr.Code)
+	}
+}
+
+func TestAIMapsDeadlineTo504(t *testing.T) {
+	fake := &fakeBedrock{explainErr: context.DeadlineExceeded}
+	h := newTestAIHandlers(fake)
+	payload := ExplainRequest{
+		aiRequestBase: aiRequestBase{Profile: "dev", Database: "app", ModelID: "m"},
+	}
+	buf, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/explain", strings.NewReader(string(buf)))
+	rr := httptest.NewRecorder()
+	h.explain(rr, req)
+	if rr.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want 504", rr.Code)
+	}
+}
