@@ -56,6 +56,13 @@ export function SqlEditor({ engineHint, schema, onRun }: Props) {
         value={sql}
         theme="dark"
         height="100%"
+        // ReactCodeMirror's outer <div> is auto-sized by default, so
+        // `.cm-editor { height: 100% }` (injected by the height prop)
+        // collapses to content height and mouse-wheel scroll never
+        // engages. Forcing h-full on the wrapper gives CodeMirror a
+        // concrete parent height and the internal .cm-scroller then
+        // overflows and receives wheel events as expected.
+        className="h-full"
         extensions={extensions}
         onChange={setSql}
         onCreateEditor={setView}
