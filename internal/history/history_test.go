@@ -211,3 +211,122 @@ func TestSetFavoriteOnEmptyFile(t *testing.T) {
 		t.Errorf("SetFavorite on empty store should be no-op, got %v", err)
 	}
 }
+
+func TestAppendDedupesSameSQL(t *testing.T) {
+	store := setHistoryPath(t)
+	at1 := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	at2 := at1.Add(5 * time.Minute)
+
+	if err := store.Append(Entry{
+		Profile: "dev", Database: "myapp", SQL: "SELECT 1",
+		At: at1, Ok: true, DurationMS: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(Entry{
+		Profile: "dev", Database: "myapp", SQL: "SELECT 1",
+		At: at2, Ok: true, DurationMS: 7,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Load("dev", "myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry after dedupe, got %d: %+v", len(got), got)
+	}
+	if !got[0].At.Equal(at2) {
+		t.Errorf("expected newest timestamp %v, got %v", at2, got[0].At)
+	}
+	if got[0].DurationMS != 7 {
+		t.Errorf("expected newest DurationMS=7, got %d", got[0].DurationMS)
+	}
+}
+
+func TestAppendPreservesFavoriteOnDedup(t *testing.T) {
+	store := setHistoryPath(t)
+	at := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+
+	if err := store.Append(Entry{
+		Profile: "dev", Database: "myapp", SQL: "SELECT 1",
+		At: at, Ok: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetFavorite(at, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-run with Favorite=false — dedupe should inherit the starred flag.
+	if err := store.Append(Entry{
+		Profile: "dev", Database: "myapp", SQL: "SELECT 1",
+		At: at.Add(time.Minute), Ok: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := store.Load("dev", "myapp")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(got))
+	}
+	if !got[0].Favorite {
+		t.Errorf("expected Favorite=true to carry over after re-run, got %+v", got[0])
+	}
+}
+
+func TestAppendKeepsDistinctProfilesDatabases(t *testing.T) {
+	store := setHistoryPath(t)
+	at := time.Now().UTC()
+	sql := "SELECT 1"
+
+	entries := []Entry{
+		{Profile: "dev", Database: "myapp", SQL: sql, At: at, Ok: true},
+		{Profile: "prod", Database: "myapp", SQL: sql, At: at, Ok: true},
+		{Profile: "dev", Database: "other", SQL: sql, At: at, Ok: true},
+	}
+	for _, e := range entries {
+		if err := store.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got, _ := store.Load("dev", "myapp"); len(got) != 1 {
+		t.Errorf("dev/myapp expected 1, got %d", len(got))
+	}
+	if got, _ := store.Load("prod", "myapp"); len(got) != 1 {
+		t.Errorf("prod/myapp expected 1, got %d", len(got))
+	}
+	if got, _ := store.Load("dev", "other"); len(got) != 1 {
+		t.Errorf("dev/other expected 1, got %d", len(got))
+	}
+}
+
+func TestAppendTrimsWhitespaceForDedup(t *testing.T) {
+	store := setHistoryPath(t)
+	at1 := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	at2 := at1.Add(time.Minute)
+
+	if err := store.Append(Entry{
+		Profile: "dev", Database: "myapp", SQL: "SELECT 1",
+		At: at1, Ok: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Same SQL but surrounded by whitespace — still considered identical.
+	if err := store.Append(Entry{
+		Profile: "dev", Database: "myapp", SQL: "  SELECT 1  \n",
+		At: at2, Ok: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := store.Load("dev", "myapp")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry after whitespace-insensitive dedupe, got %d", len(got))
+	}
+	if !got[0].At.Equal(at2) {
+		t.Errorf("expected newest timestamp, got %v", got[0].At)
+	}
+}

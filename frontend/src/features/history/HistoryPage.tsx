@@ -194,13 +194,13 @@ function HistoryRow({
         onClick={(e) => e.stopPropagation()}
       >
         <Button
-          size="icon"
-          variant="ghost"
+          size="sm"
+          variant="outline"
           onClick={onCopy}
           title="Copy SQL to clipboard"
-          aria-label="Copy SQL to clipboard"
         >
           <Copy />
+          Copy
         </Button>
         <Button
           size="sm"
