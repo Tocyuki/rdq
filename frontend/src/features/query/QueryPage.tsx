@@ -88,16 +88,11 @@ export function QueryPage() {
 
   const confirmAndRun = useCallback(() => {
     if (!pendingConfirm) return
-    const { args } = pendingConfirm
-    execute.mutate(
-      { ...args, confirmed: true },
-      {
-        onSuccess: () => setPendingConfirm(null),
-        // onError handled by the default in useExecuteQuery; keep the
-        // dialog open on failure so the user can read the server error
-        // and decide whether to cancel.
-      },
-    )
+    // Close the dialog synchronously; the result (success or AWS error)
+    // surfaces in the Result panel below, not back on the modal.
+    const args = { ...pendingConfirm.args, confirmed: true }
+    setPendingConfirm(null)
+    execute.mutate(args)
   }, [pendingConfirm, execute])
 
   const errorMessage = execute.error?.message ?? null
