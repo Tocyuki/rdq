@@ -11,18 +11,6 @@ import { useSession } from '@/hooks/useSession'
 import { endpoints } from '@/lib/api/endpoints'
 import type { Session } from '@/lib/api/types'
 
-type TriState = 'unset' | 'true' | 'false'
-
-function triStateFromSession(v: boolean | undefined): TriState {
-  if (v === undefined) return 'unset'
-  return v ? 'true' : 'false'
-}
-
-function triStateToBool(v: TriState): boolean | undefined {
-  if (v === 'unset') return undefined
-  return v === 'true'
-}
-
 /**
  * SettingsPage exposes per-profile preferences: Bedrock model + language,
  * the production warning flag, and the read-only guard. All pass through
@@ -31,10 +19,10 @@ function triStateToBool(v: TriState): boolean | undefined {
  *
  * Rendering is gated on `session.isSuccess`: the inner <SettingsForm />
  * is mounted only after /api/session has resolved, so its `useState`
- * initializers see the current values instead of falling back to the
- * blank "unset" defaults when the component mounts before the query
- * completes. Without the gate a browser refresh would display empty
- * selections even when state.json holds real values.
+ * initializers see the current values instead of the binary defaults
+ * when the component mounts before the query completes. Without the gate
+ * a browser refresh could briefly display the defaults even when
+ * state.json holds explicit choices.
  */
 export function SettingsPage() {
   const session = useSession()
@@ -61,6 +49,16 @@ export function SettingsPage() {
   )
 }
 
+// Read-only defaults to on so a fresh install cannot drop a table by
+// accident. Production defaults to off (warning colour opt-in).
+// Mirrors the guard in ConnectionBar.
+function defaultReadOnly(v: boolean | undefined): boolean {
+  return v !== false
+}
+function defaultProduction(v: boolean | undefined): boolean {
+  return v === true
+}
+
 function SettingsForm({
   initial,
   onSaved,
@@ -70,11 +68,11 @@ function SettingsForm({
 }) {
   const [model, setModel] = useState(() => initial.bedrockModel ?? '')
   const [language, setLanguage] = useState(() => initial.bedrockLanguage ?? '')
-  const [production, setProduction] = useState<TriState>(() =>
-    triStateFromSession(initial.isProduction),
+  const [production, setProduction] = useState<boolean>(() =>
+    defaultProduction(initial.isProduction),
   )
-  const [readOnly, setReadOnly] = useState<TriState>(() =>
-    triStateFromSession(initial.isReadOnly),
+  const [readOnly, setReadOnly] = useState<boolean>(() =>
+    defaultReadOnly(initial.isReadOnly),
   )
 
   const save = useMutation({
@@ -83,8 +81,8 @@ function SettingsForm({
         ...initial,
         bedrockModel: model,
         bedrockLanguage: language,
-        isProduction: triStateToBool(production),
-        isReadOnly: triStateToBool(readOnly),
+        isProduction: production,
+        isReadOnly: readOnly,
       }),
     onSuccess: () => {
       toast.success('Settings saved')
@@ -125,23 +123,15 @@ function SettingsForm({
           before reaching AWS. The default is <em>on</em> so fresh installs are safe.
         </p>
         <div className="flex flex-wrap items-center gap-2 pt-1">
-          <TriStateOption
-            value="unset"
-            current={readOnly}
-            onPick={setReadOnly}
-            label="Unanswered (defaults to on)"
-          />
-          <TriStateOption
-            value="true"
-            current={readOnly}
-            onPick={setReadOnly}
+          <BoolOption
+            active={readOnly === true}
+            onPick={() => setReadOnly(true)}
             label="Read-only (safe)"
             icon={<Lock className="size-3" />}
           />
-          <TriStateOption
-            value="false"
-            current={readOnly}
-            onPick={setReadOnly}
+          <BoolOption
+            active={readOnly === false}
+            onPick={() => setReadOnly(false)}
             label="Allow writes"
             icon={<Unlock className="size-3" />}
             destructive
@@ -156,22 +146,14 @@ function SettingsForm({
           destructive statements are less likely to slip in unnoticed.
         </p>
         <div className="flex flex-wrap items-center gap-2 pt-1">
-          <TriStateOption
-            value="unset"
-            current={production}
-            onPick={setProduction}
-            label="Unanswered"
-          />
-          <TriStateOption
-            value="false"
-            current={production}
-            onPick={setProduction}
+          <BoolOption
+            active={production === false}
+            onPick={() => setProduction(false)}
             label="Not production"
           />
-          <TriStateOption
-            value="true"
-            current={production}
-            onPick={setProduction}
+          <BoolOption
+            active={production === true}
+            onPick={() => setProduction(true)}
             label="Production"
             icon={<AlertTriangle className="size-3" />}
             destructive
@@ -188,28 +170,25 @@ function SettingsForm({
   )
 }
 
-function TriStateOption({
-  value,
-  current,
+function BoolOption({
+  active,
   onPick,
   label,
   icon,
   destructive,
 }: {
-  value: TriState
-  current: TriState
-  onPick: (v: TriState) => void
+  active: boolean
+  onPick: () => void
   label: string
   icon?: React.ReactNode
   destructive?: boolean
 }) {
-  const active = current === value
   return (
     <Button
       type="button"
       size="sm"
       variant={active ? (destructive ? 'destructive' : 'default') : 'outline'}
-      onClick={() => onPick(value)}
+      onClick={onPick}
     >
       {icon}
       {label}

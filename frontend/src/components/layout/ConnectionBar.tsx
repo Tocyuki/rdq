@@ -1,4 +1,4 @@
-import { AlertTriangle, Lock, Plug } from 'lucide-react'
+import { AlertTriangle, Lock, Plug, Unlock } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -143,7 +143,7 @@ export function ConnectionBar() {
           Production
         </Badge>
       )}
-      {isReadOnly && (
+      {isReadOnly ? (
         <Badge
           variant={isProduction ? 'secondary' : 'outline'}
           className="gap-1 uppercase tracking-wider"
@@ -151,6 +151,15 @@ export function ConnectionBar() {
         >
           <Lock className="size-3" />
           Read-only
+        </Badge>
+      ) : (
+        <Badge
+          variant={isProduction ? 'destructive' : 'outline'}
+          className="gap-1 uppercase tracking-wider"
+          title="Writes are allowed — INSERT/UPDATE/DELETE will execute. Toggle in Settings."
+        >
+          <Unlock className="size-3" />
+          Allow writes
         </Badge>
       )}
       <Separator
