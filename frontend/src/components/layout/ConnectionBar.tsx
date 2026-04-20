@@ -49,15 +49,18 @@ export function ConnectionBar() {
    * every downstream selection, so we clear cluster/secret/database and
    * reopen the full wizard under the new profile's resources.
    *
-   * isProduction is deliberately dropped so the server treats the value
-   * as "SPA did not touch this" and leaves the new profile's stored
-   * production flag intact. Without this, the old profile's flag would
-   * bleed into the new profile's state.json entry.
+   * Both `isProduction` and `isReadOnly` are deliberately dropped from
+   * the payload. Server-side these fields are conservative: a nil
+   * (undefined) value means "SPA did not touch this" and the existing
+   * state.json value for the destination profile is preserved. Sending
+   * the old profile's flags would leak them into the new profile's
+   * stored entry.
    */
   function handleProfileChange(nextProfile: string) {
     if (nextProfile === data.profile) return
-    const { isProduction: _drop, ...rest } = data
-    void _drop
+    const { isProduction: _drop1, isReadOnly: _drop2, ...rest } = data
+    void _drop1
+    void _drop2
     save.mutate(
       {
         ...rest,

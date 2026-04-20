@@ -3,6 +3,7 @@ package runner
 import (
 	"errors"
 	"strings"
+	"unicode"
 )
 
 // ErrWriteBlocked is returned when a statement is rejected because the
@@ -50,12 +51,17 @@ func IsReadOnlySQL(sql string) bool {
 }
 
 // firstKeyword returns the first alphabetic word in sql, uppercased, with
-// leading whitespace and SQL comments stripped. Returns "" if no keyword
-// can be identified.
+// leading whitespace and SQL comments stripped. Whitespace handling uses
+// unicode.IsSpace so accidental NBSP / ideographic-space bytes pasted in
+// from editors or docs do not cause the classifier to misidentify a
+// SELECT as a write. Returns "" if no keyword can be identified.
 func firstKeyword(sql string) string {
 	remaining := sql
+	// Strip a UTF-8 BOM if present. unicode.IsSpace does not treat BOM
+	// as whitespace, but keyboards / pastes occasionally introduce it.
+	remaining = strings.TrimPrefix(remaining, "\uFEFF")
 	for {
-		remaining = strings.TrimLeft(remaining, " \t\r\n")
+		remaining = strings.TrimLeftFunc(remaining, unicode.IsSpace)
 		if remaining == "" {
 			return ""
 		}
