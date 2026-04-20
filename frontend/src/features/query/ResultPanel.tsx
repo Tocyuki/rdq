@@ -1,7 +1,7 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { ExecuteResponseBody } from '@/lib/api/types'
 
-import { ExportMenu } from './ExportMenu'
+import { CopyMenu, ExportMenu } from './ExportMenu'
 import { ResultTable } from './ResultTable'
 
 interface Props {
@@ -38,7 +38,10 @@ export function ResultPanel({ result, error, loading }: Props) {
           )}
           {!loading && !result && !error && <span>No result yet.</span>}
         </div>
-        <ExportMenu result={result} />
+        <div className="flex items-center gap-2">
+          <CopyMenu result={result} />
+          <ExportMenu result={result} />
+        </div>
       </div>
 
       {error && (

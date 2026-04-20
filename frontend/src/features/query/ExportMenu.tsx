@@ -1,4 +1,4 @@
-import { Download } from 'lucide-react'
+import { Copy, Download } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -16,7 +16,23 @@ interface Props {
 }
 
 /**
- * ExportMenu offers CSV and JSON downloads for the current result.
+ * rowsToJSON produces the pretty-printed JSON representation of a result
+ * with the column order preserved (matches the payload shown in the JSON
+ * tab). Shared between the Export download and the Copy-to-clipboard
+ * flows so both surfaces stay in sync.
+ */
+function rowsToJSON(result: ExecuteResponseBody): string {
+  return JSON.stringify(
+    result.rows.map((row) =>
+      Object.fromEntries(result.columns.map((c, i) => [c, row[i]])),
+    ),
+    null,
+    2,
+  )
+}
+
+/**
+ * ExportMenu offers CSV and JSON file downloads for the current result.
  * JSON is pretty-printed (2 spaces) so piping into another tool is easy.
  */
 export function ExportMenu({ result }: Props) {
@@ -45,15 +61,57 @@ export function ExportMenu({ result }: Props) {
           disabled={disabled}
           onSelect={() => {
             if (!result) return
-            const json = JSON.stringify(
-              result.rows.map((row) =>
-                Object.fromEntries(result.columns.map((c, i) => [c, row[i]])),
-              ),
-              null,
-              2,
-            )
-            downloadJSON('rdq', json)
+            downloadJSON('rdq', rowsToJSON(result))
             toast.success('JSON downloaded')
+          }}
+        >
+          JSON
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * CopyMenu writes the current result to the OS clipboard. Same CSV / JSON
+ * choices the Export dropdown offers — users pick the format that
+ * matches where they are pasting into (spreadsheet vs JSON tool).
+ */
+export function CopyMenu({ result }: Props) {
+  const disabled = !result || result.rows.length === 0
+
+  async function writeToClipboard(content: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(content)
+      toast.success(`${label} copied to clipboard`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Copy failed')
+    }
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="outline" disabled={disabled}>
+          <Copy />
+          Copy
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem
+          disabled={disabled}
+          onSelect={() => {
+            if (!result) return
+            void writeToClipboard(toCSV(result.columns, result.rows), 'CSV')
+          }}
+        >
+          CSV
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={disabled}
+          onSelect={() => {
+            if (!result) return
+            void writeToClipboard(rowsToJSON(result), 'JSON')
           }}
         >
           JSON
