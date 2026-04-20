@@ -240,6 +240,16 @@ type Model struct {
 	// and after every profile switch.
 	isReadOnly bool
 
+	// Confirm-run prompt state. When the user presses F5/^R on a
+	// DELETE/UPDATE without WHERE (or a TRUNCATE), runner.NeedsConfirmation
+	// flips confirmRunPromptOpen=true and stashes the warning reason so
+	// a footer banner can render it. Enter/y proceeds with the staged
+	// SQL; Esc/n cancels. pendingConfirmSQL captures the statement so
+	// further edits during the prompt do not change what runs.
+	confirmRunPromptOpen bool
+	confirmRunReason     string
+	pendingConfirmSQL    string
+
 	// Transient status message (e.g. CSV export confirmation, yy yank).
 	// flashToken is bumped every time flashMessage is set so a tea.Tick
 	// auto-clear can ignore stale ticks for messages that have already
@@ -683,6 +693,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.updateDatabasePicker(msg))
 		case m.productionPromptOpen:
 			cmds = append(cmds, m.updateProductionPrompt(msg))
+		case m.confirmRunPromptOpen:
+			cmds = append(cmds, m.updateConfirmRunPrompt(msg))
 		case m.modelPickerOpen:
 			cmds = append(cmds, m.updateModelPicker(msg))
 		case m.languagePickerOpen:
@@ -736,13 +748,18 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return tea.Quit, true
 
 	case key.Matches(msg, m.keys.Run):
-		if m.executing {
+		if m.executing || m.confirmRunPromptOpen {
 			return nil, true
 		}
-		m.executing = true
-		m.lastErr = nil
-		m.flashMessage = ""
-		return tea.Batch(m.spin.Tick, runStatement(m.client, m.target, m.editor.Value(), m.isReadOnly)), true
+		sql := m.editor.Value()
+		if need, reason := runner.NeedsConfirmation(sql); need {
+			m.confirmRunPromptOpen = true
+			m.confirmRunReason = reason
+			m.pendingConfirmSQL = sql
+			m.flashMessage = ""
+			return nil, true
+		}
+		return m.startRun(sql), true
 
 	case key.Matches(msg, m.keys.Focus):
 		m.toggleFocus()
@@ -1537,6 +1554,22 @@ func (m Model) View() string {
 		return strings.Join([]string{
 			status,
 			m.productionList.View(),
+			helpBarStyle.Render(helpLine),
+		}, "\n")
+	}
+
+	if m.confirmRunPromptOpen {
+		// Destructive-statement warning: show the reason, preview the
+		// staged SQL, and hint at the y/enter/esc keys. errorStyle
+		// paints it in red to match the gravity of the prompt.
+		banner := errorStyle.Render("⚠  " + m.confirmRunReason)
+		preview := jsonStyle.Render(m.pendingConfirmSQL)
+		hint := helpStyle.Render("enter / y = run anyway   ·   esc / n = cancel")
+		return strings.Join([]string{
+			status,
+			banner,
+			preview,
+			hint,
 			helpBarStyle.Render(helpLine),
 		}, "\n")
 	}
@@ -3311,6 +3344,38 @@ func (m *Model) persistIsReadOnly(value bool) error {
 	ps.IsReadOnly = &v
 	st.Set(m.target.profile, ps)
 	return st.Save()
+}
+
+// startRun is the common execution kickoff called by both the direct
+// F5/^R path and the post-confirmation path. It flips the spinner state
+// and dispatches runStatement in a single tea.Cmd.
+func (m *Model) startRun(sql string) tea.Cmd {
+	m.executing = true
+	m.lastErr = nil
+	m.flashMessage = ""
+	return tea.Batch(m.spin.Tick, runStatement(m.client, m.target, sql, m.isReadOnly))
+}
+
+// updateConfirmRunPrompt handles input while the destructive-statement
+// confirmation banner is up. Enter / y runs the staged SQL; Esc / n /
+// Ctrl+C cancels. Any other key is swallowed so the prompt stays modal
+// and the editor does not accidentally receive keystrokes.
+func (m *Model) updateConfirmRunPrompt(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter", "y", "Y":
+		sql := m.pendingConfirmSQL
+		m.confirmRunPromptOpen = false
+		m.confirmRunReason = ""
+		m.pendingConfirmSQL = ""
+		return m.startRun(sql)
+	case "esc", "n", "N", "ctrl+c":
+		m.confirmRunPromptOpen = false
+		m.confirmRunReason = ""
+		m.pendingConfirmSQL = ""
+		m.flashMessage = "run cancelled"
+		return m.scheduleFlashClear()
+	}
+	return nil
 }
 
 // applyAskResult replaces the editor's contents with the AI-generated SQL,

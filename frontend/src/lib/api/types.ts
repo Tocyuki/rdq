@@ -72,6 +72,13 @@ export interface ExecuteRequestBody {
   secret: string
   database: string
   sql: string
+  /**
+   * Set to true after the user acknowledges a destructive-statement
+   * warning (DELETE/UPDATE without WHERE, TRUNCATE). Without it the
+   * server returns a 409 with code "confirmation_required" so the UI
+   * can show a dialog first.
+   */
+  confirmed?: boolean
 }
 
 export interface ExecuteResponseBody {

@@ -76,12 +76,19 @@ type DatabasesDTO struct {
 // ExecuteRequest is the JSON body of POST /api/execute. All four connection
 // fields are required because the server is stateless — it does not assume
 // the session store has the right values at the moment the request arrives.
+//
+// Confirmed is set by the SPA / TUI after the user has acknowledged a
+// destructive-statement warning (DELETE / UPDATE without WHERE, TRUNCATE).
+// The handler rejects such statements with errCodeConfirmationRequired
+// when Confirmed is false; the UI then prompts and retries with
+// Confirmed=true.
 type ExecuteRequest struct {
-	Profile  string `json:"profile"`
-	Cluster  string `json:"cluster"`
-	Secret   string `json:"secret"`
-	Database string `json:"database"`
-	SQL      string `json:"sql"`
+	Profile   string `json:"profile"`
+	Cluster   string `json:"cluster"`
+	Secret    string `json:"secret"`
+	Database  string `json:"database"`
+	SQL       string `json:"sql"`
+	Confirmed bool   `json:"confirmed,omitempty"`
 }
 
 // ExecuteResponse is the JSON body returned by POST /api/execute. Rows is a

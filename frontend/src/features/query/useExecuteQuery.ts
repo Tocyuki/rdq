@@ -12,6 +12,7 @@ interface ExecuteArgs {
   secret: string
   database: string
   sql: string
+  confirmed?: boolean
 }
 
 /**
@@ -20,9 +21,13 @@ interface ExecuteArgs {
  * History is invalidated on every execution (success or failure) so the
  * HistoryPanel reflects new entries appended by the server.
  *
- * Error handling: a read-only rejection from the server carries
- * code="read_only" on ApiError. We upgrade the toast for that case
- * to mention the Settings toggle so the user has a clear next step.
+ * Error-code handling:
+ *   - read_only (HTTP 403): toast the user toward Settings → Allow writes.
+ *   - confirmation_required (HTTP 409): do NOT toast here; the caller
+ *     (QueryPage) watches for this code, opens a confirmation dialog,
+ *     and re-invokes the mutation with `confirmed: true` so the
+ *     two-step flow stays in one place.
+ *   - everything else: plain error toast.
  */
 export function useExecuteQuery() {
   const qc = useQueryClient()
@@ -36,6 +41,10 @@ export function useExecuteQuery() {
     },
     onError: (err, vars) => {
       qc.invalidateQueries({ queryKey: ['history', vars.profile, vars.database] })
+      if (err instanceof ApiError && err.code === 'confirmation_required') {
+        // QueryPage opens the confirmation dialog — no global toast.
+        return
+      }
       if (err instanceof ApiError && err.code === 'read_only') {
         toast.error('Read-only mode is on — destructive statements are blocked.', {
           description: 'Toggle "Allow writes" in Settings to run this query.',

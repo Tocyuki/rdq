@@ -276,6 +276,73 @@ func TestExecuteDefaultsToReadOnlyWhenFlagUnset(t *testing.T) {
 	}
 }
 
+func TestExecuteRejectsDestructiveWithoutConfirmation(t *testing.T) {
+	h, histPath := newTestExecuteHandlers(t)
+	h.executeSQL = func(_ context.Context, _ aws.Config, _ runner.Target, _ string) (*runner.Result, time.Duration, error) {
+		t.Fatal("executeSQL must not be called before the user confirms a destructive statement")
+		return nil, 0, nil
+	}
+	rr := postJSON(t, h.execute, "/api/execute", ExecuteRequest{
+		Profile: "dev", Cluster: "arn:c", Secret: "arn:s", Database: "app",
+		SQL: "DELETE FROM users",
+	})
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (needs confirmation): %s", rr.Code, rr.Body.String())
+	}
+	var body ErrorDTO
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Code != errCodeConfirmationRequired {
+		t.Errorf("code = %s, want %s", body.Error.Code, errCodeConfirmationRequired)
+	}
+	// Unconfirmed attempts should NOT clutter history.
+	if _, err := os.Stat(histPath); err == nil {
+		// If the file exists, it must be empty.
+		assertHistoryLines(t, histPath, 0, nil)
+	}
+}
+
+func TestExecuteProceedsWhenConfirmed(t *testing.T) {
+	h, _ := newTestExecuteHandlers(t)
+	called := false
+	h.executeSQL = func(_ context.Context, _ aws.Config, _ runner.Target, _ string) (*runner.Result, time.Duration, error) {
+		called = true
+		return &runner.Result{Columns: []string{}, Rows: [][]any{}, Updated: 42}, time.Millisecond, nil
+	}
+	rr := postJSON(t, h.execute, "/api/execute", ExecuteRequest{
+		Profile: "dev", Cluster: "arn:c", Secret: "arn:s", Database: "app",
+		SQL:       "DELETE FROM users",
+		Confirmed: true,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 after confirmation: %s", rr.Code, rr.Body.String())
+	}
+	if !called {
+		t.Errorf("expected executeSQL to be invoked when Confirmed=true")
+	}
+}
+
+func TestExecuteConfirmationBypassedBySafeStatement(t *testing.T) {
+	h, _ := newTestExecuteHandlers(t)
+	called := false
+	h.executeSQL = func(_ context.Context, _ aws.Config, _ runner.Target, _ string) (*runner.Result, time.Duration, error) {
+		called = true
+		return &runner.Result{}, time.Millisecond, nil
+	}
+	// UPDATE with a WHERE clause is safe → no confirmation required.
+	rr := postJSON(t, h.execute, "/api/execute", ExecuteRequest{
+		Profile: "dev", Cluster: "arn:c", Secret: "arn:s", Database: "app",
+		SQL: "UPDATE users SET x = 1 WHERE id = 1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for safe UPDATE: %s", rr.Code, rr.Body.String())
+	}
+	if !called {
+		t.Errorf("expected executeSQL to be invoked for UPDATE…WHERE without Confirmed flag")
+	}
+}
+
 func assertHistoryLines(t *testing.T, path string, want int, check func([]history.Entry)) {
 	t.Helper()
 	f, err := os.Open(path)

@@ -1813,6 +1813,54 @@ func TestToggleReadOnlyRoundTripsState(t *testing.T) {
 	}
 }
 
+// TestConfirmRunPromptGatesDestructiveStatements verifies that pressing
+// F5/^R on a DELETE without WHERE opens the confirmation prompt instead
+// of kicking off a run, and that cancel / confirm work as documented.
+func TestConfirmRunPromptGatesDestructiveStatements(t *testing.T) {
+	m := setupProductionTest(t)
+	m.productionPromptOpen = false
+	m.editor.SetValue("DELETE FROM users")
+
+	// F5 → should open the confirm prompt, NOT set executing=true.
+	var model tea.Model = m
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyF5})
+	m = model.(Model)
+	if !m.confirmRunPromptOpen {
+		t.Fatalf("expected confirm prompt to open for DELETE without WHERE")
+	}
+	if m.executing {
+		t.Errorf("executing should stay false until the user confirms")
+	}
+	if !strings.Contains(m.confirmRunReason, "DELETE") {
+		t.Errorf("reason should mention DELETE, got %q", m.confirmRunReason)
+	}
+	if m.pendingConfirmSQL != "DELETE FROM users" {
+		t.Errorf("pendingConfirmSQL = %q, want the staged SQL", m.pendingConfirmSQL)
+	}
+
+	// Esc dismisses without running.
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = model.(Model)
+	if m.confirmRunPromptOpen {
+		t.Errorf("Esc should close the confirm prompt")
+	}
+	if m.executing {
+		t.Errorf("Esc must not start a run")
+	}
+
+	// Safe UPDATE with WHERE should bypass the gate.
+	m.editor.SetValue("UPDATE users SET x = 1 WHERE id = 1")
+	model = m
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyF5})
+	m = model.(Model)
+	if m.confirmRunPromptOpen {
+		t.Errorf("safe UPDATE should not trigger the confirm prompt")
+	}
+	if !m.executing {
+		t.Errorf("safe statement should kick off execution")
+	}
+}
+
 // TestReadOnlyIndicatorInRenderStatus confirms the 5th status line
 // flips between "🔒 read-only" and "allowed" depending on m.isReadOnly.
 func TestReadOnlyIndicatorInRenderStatus(t *testing.T) {

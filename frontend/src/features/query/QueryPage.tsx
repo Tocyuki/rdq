@@ -10,20 +10,36 @@ import { ExplainDialog } from '@/features/ai/ExplainDialog'
 import { ReviewDialog } from '@/features/ai/ReviewDialog'
 import { useSchema } from '@/features/schema/useSchema'
 import { SchemaSidebar } from '@/features/schema/SchemaSidebar'
+import { ApiError } from '@/lib/api/client'
 import { useUIStore } from '@/stores/uiStore'
 
+import { ConfirmRunDialog } from './ConfirmRunDialog'
 import { SqlEditor } from './editor/SqlEditor'
 import { ResultPanel } from './ResultPanel'
 import { useExecuteQuery } from './useExecuteQuery'
+
+interface PendingConfirm {
+  args: {
+    profile: string
+    cluster: string
+    secret: string
+    database: string
+    sql: string
+  }
+  reason: string
+}
 
 /**
  * QueryPage hosts the editor + result stack. Run is invoked via either
  * the Run button or Cmd/Ctrl+Enter inside the editor — both paths call
  * the same useExecuteQuery mutation.
  *
- * F4 adds the left-side SchemaSidebar; it reads from the same
- * /api/schema cache so double-clicking a column instantly inserts it
- * into the editor via pendingEditorText.
+ * Destructive-statement guard: when /api/execute returns
+ * errCodeConfirmationRequired (HTTP 409) we capture the args that
+ * triggered it in `pendingConfirm`, show <ConfirmRunDialog>, and on
+ * "Run anyway" re-invoke the mutation with `confirmed: true`. The
+ * mutation's default onError suppresses the toast for this code so
+ * the dialog is the only surface for the prompt.
  */
 export function QueryPage() {
   const session = useSession()
@@ -39,6 +55,7 @@ export function QueryPage() {
   const [reviewOpen, setReviewOpen] = useState(false)
   const [analyzeOpen, setAnalyzeOpen] = useState(false)
   const [explainOpen, setExplainOpen] = useState(false)
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null)
 
   const runQuery = useCallback(() => {
     if (!sessionIsComplete(session.data)) {
@@ -50,15 +67,35 @@ export function QueryPage() {
       return
     }
     const data = session.data!
-    execute.mutate({
+    const args = {
       profile: data.profile,
       cluster: data.cluster,
       secret: data.secret,
       database: data.database,
       sql,
+    }
+    execute.mutate(args, {
+      onError: (err) => {
+        if (err instanceof ApiError && err.code === 'confirmation_required') {
+          setPendingConfirm({ args, reason: err.message })
+        }
+      },
     })
   }, [session.data, sql, execute])
 
+  const confirmAndRun = useCallback(() => {
+    if (!pendingConfirm) return
+    const { args } = pendingConfirm
+    execute.mutate(
+      { ...args, confirmed: true },
+      {
+        onSuccess: () => setPendingConfirm(null),
+        // onError handled by the default in useExecuteQuery; keep the
+        // dialog open on failure so the user can read the server error
+        // and decide whether to cancel.
+      },
+    )
+  }, [pendingConfirm, execute])
 
   const errorMessage = execute.error?.message ?? null
 
@@ -118,6 +155,14 @@ export function QueryPage() {
         open={explainOpen}
         onOpenChange={setExplainOpen}
         initialError={errorMessage ?? undefined}
+      />
+      <ConfirmRunDialog
+        open={pendingConfirm !== null}
+        reason={pendingConfirm?.reason ?? null}
+        sql={pendingConfirm?.args.sql ?? ''}
+        pending={execute.isPending}
+        onCancel={() => setPendingConfirm(null)}
+        onConfirm={confirmAndRun}
       />
     </div>
   )

@@ -85,6 +85,20 @@ func (h *executeHandlers) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Destructive-statement guard. A DELETE / UPDATE without WHERE or a
+	// TRUNCATE is almost always an accident; refuse until the UI has
+	// bounced the user through a confirmation. The SPA / TUI re-submits
+	// with Confirmed=true once the user acknowledges. We deliberately do
+	// *not* record a history entry here — the statement hasn't been
+	// attempted in earnest yet; recording would clutter the picker with
+	// prompts the user cancelled out of.
+	if !req.Confirmed {
+		if need, reason := runner.NeedsConfirmation(req.SQL); need {
+			writeJSONError(w, http.StatusConflict, errCodeConfirmationRequired, reason)
+			return
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), runner.ExecuteTimeout)
 	defer cancel()
 
