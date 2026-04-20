@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { HighlightedText } from '@/features/query/HighlightedText'
 import { sessionIsComplete, useSession } from '@/hooks/useSession'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/stores/uiStore'
@@ -73,7 +74,21 @@ export function SchemaSidebar() {
   }, [tables, filter])
 
   if (!sessionIsComplete(session.data)) {
-    return null
+    // Keep the aside structure so the surrounding PanelGroup has stable
+    // children — otherwise mounting it later would reset the user's
+    // chosen split sizes.
+    return (
+      <aside className="flex h-full w-full flex-col border-r border-border bg-card">
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+          <h2 className="text-xs font-semibold tracking-wide text-muted-foreground">
+            Schema
+          </h2>
+        </div>
+        <div className="flex flex-1 items-center justify-center p-3 text-xs text-muted-foreground">
+          Pick a connection to see tables.
+        </div>
+      </aside>
+    )
   }
 
   async function copyToken(token: string) {
@@ -86,7 +101,7 @@ export function SchemaSidebar() {
   }
 
   return (
-    <aside className="flex h-full w-64 flex-col border-r border-border bg-card">
+    <aside className="flex h-full w-full flex-col border-r border-border bg-card">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <h2 className="text-xs font-semibold tracking-wide text-muted-foreground">
           Schema
@@ -139,11 +154,16 @@ export function SchemaSidebar() {
                   copyTitle={`Copy "${t.table}"`}
                 >
                   <ChevronRight
-                    className={cn('size-3 transition-transform', open && 'rotate-90')}
+                    className={cn(
+                      'size-3.5 shrink-0 text-muted-foreground transition-transform',
+                      open && 'rotate-90',
+                    )}
                   />
-                  <TableIcon className="size-3 text-muted-foreground" />
-                  <span className="truncate">{t.table}</span>
-                  <span className="ml-auto text-[10px] text-muted-foreground">
+                  <TableIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">
+                    <HighlightedText text={t.table} term={filter} />
+                  </span>
+                  <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">
                     {t.columns.length}
                   </span>
                 </Row>
@@ -163,8 +183,10 @@ export function SchemaSidebar() {
                             onCopy={() => copyToken(qualified)}
                             copyTitle={`Copy "${qualified}"`}
                           >
-                            <span className="truncate">{c.name}</span>
-                            <span className="ml-auto text-[10px] text-muted-foreground">
+                            <span className="truncate">
+                              <HighlightedText text={c.name} term={filter} />
+                            </span>
+                            <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">
                               {c.type}
                             </span>
                           </Row>
@@ -240,7 +262,7 @@ function Row({
           selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
         )}
       >
-        <Copy className="size-3" />
+        <Copy className="size-3.5" />
       </button>
     </div>
   )
