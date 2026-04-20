@@ -75,6 +75,13 @@ func (s *sessionStore) PersistToState() error {
 		v := *snap.IsProduction
 		ps.IsProduction = &v
 	}
+	// Same conservative handling for IsReadOnly — the safety default
+	// (nil → treated as true) should never be overwritten unless the
+	// SPA explicitly chose a value.
+	if snap.IsReadOnly != nil {
+		v := *snap.IsReadOnly
+		ps.IsReadOnly = &v
+	}
 	st.Set(snap.Profile, ps)
 	return st.Save()
 }
@@ -112,6 +119,10 @@ func LoadFromState(seed SessionDTO) SessionDTO {
 	if seed.IsProduction == nil && ps.IsProduction != nil {
 		v := *ps.IsProduction
 		seed.IsProduction = &v
+	}
+	if seed.IsReadOnly == nil && ps.IsReadOnly != nil {
+		v := *ps.IsReadOnly
+		seed.IsReadOnly = &v
 	}
 	return seed
 }

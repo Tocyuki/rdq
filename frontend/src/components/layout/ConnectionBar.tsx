@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, Plug } from 'lucide-react'
+import { AlertTriangle, Lock, Plug } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -117,6 +117,10 @@ export function ConnectionBar() {
   }
 
   const isProduction = data.isProduction === true
+  // Read-only defaults to ON when the backend has never seen an answer
+  // (undefined). Mirror that default here so the badge is shown until
+  // the user explicitly flips the flag off in Settings.
+  const isReadOnly = data.isReadOnly !== false
 
   return (
     <header
@@ -132,6 +136,16 @@ export function ConnectionBar() {
         <Badge variant="production" className="gap-1 uppercase tracking-wider">
           <AlertTriangle className="size-3" />
           Production
+        </Badge>
+      )}
+      {isReadOnly && (
+        <Badge
+          variant={isProduction ? 'secondary' : 'outline'}
+          className="gap-1 uppercase tracking-wider"
+          title="Read-only mode — only SELECT-like statements will execute. Change in Settings."
+        >
+          <Lock className="size-3" />
+          Read-only
         </Badge>
       )}
       <Separator

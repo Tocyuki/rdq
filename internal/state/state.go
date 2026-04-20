@@ -43,6 +43,12 @@ type ProfileState struct {
 	// value indicates the user made a deliberate choice and is not asked
 	// again until they explicitly reopen the toggle.
 	IsProduction *bool `json:"is_production,omitempty"`
+	// IsReadOnly, when true, forces the execute path to reject any SQL
+	// whose leading keyword is not a safe read operation (SELECT / WITH /
+	// SHOW / EXPLAIN / DESCRIBE / DESC / TABLE / VALUES). nil defaults
+	// to "enabled" at runtime so a fresh install is safe out of the box;
+	// users who actively want to run writes must flip it off in Settings.
+	IsReadOnly *bool `json:"is_read_only,omitempty"`
 }
 
 // Load reads the state file. A missing file yields an empty State; a malformed

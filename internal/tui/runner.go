@@ -46,8 +46,17 @@ type executeMsg struct {
 // runStatement returns a tea.Cmd that invokes runner.ExecuteSQL and emits an
 // executeMsg with the result. Empty SQL returns runner.ErrEmptySQL so the
 // View layer can treat it as a hint rather than a real error.
-func runStatement(client *rdsdata.Client, tgt target, sql string) tea.Cmd {
+//
+// readOnly gates destructive statements: when true and the SQL's leading
+// keyword is not a pure read, the command short-circuits with
+// runner.ErrWriteBlocked so no AWS round trip happens. The caller
+// (Model.readOnlyForRun) decides the policy by consulting state.json,
+// keeping the TUI consistent with the GUI's /api/execute enforcement.
+func runStatement(client *rdsdata.Client, tgt target, sql string, readOnly bool) tea.Cmd {
 	return func() tea.Msg {
+		if readOnly && !runner.IsReadOnlySQL(sql) {
+			return executeMsg{SQL: sql, Err: runner.ErrWriteBlocked}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), runner.ExecuteTimeout)
 		defer cancel()
 

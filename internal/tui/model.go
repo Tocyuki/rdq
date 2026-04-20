@@ -734,7 +734,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.executing = true
 		m.lastErr = nil
 		m.flashMessage = ""
-		return tea.Batch(m.spin.Tick, runStatement(m.client, m.target, m.editor.Value())), true
+		return tea.Batch(m.spin.Tick, runStatement(m.client, m.target, m.editor.Value(), m.readOnlyForRun())), true
 
 	case key.Matches(msg, m.keys.Focus):
 		m.toggleFocus()
@@ -3228,6 +3228,28 @@ func (m *Model) persistBedrockSettings() error {
 	ps.BedrockLanguage = m.bedrockLanguage
 	st.Set(m.target.profile, ps)
 	return st.Save()
+}
+
+// readOnlyForRun resolves the per-profile read-only policy from state.json
+// at the moment of execution, so a toggle made in the GUI Settings page
+// (or by hand-editing state.json) is picked up by the next TUI run
+// without a restart. A nil flag — fresh install or a profile that has
+// never been touched — defaults to read-only ON for safety. Ephemeral
+// mode (no profile name) is also treated as read-only because we cannot
+// associate a policy with anonymous credentials.
+func (m *Model) readOnlyForRun() bool {
+	if m.target.profile == "" {
+		return true
+	}
+	st, err := state.Load()
+	if err != nil {
+		return true
+	}
+	ps := st.Get(m.target.profile)
+	if ps.IsReadOnly == nil {
+		return true
+	}
+	return *ps.IsReadOnly
 }
 
 // applyAskResult replaces the editor's contents with the AI-generated SQL,

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Tocyuki/rdq/internal/history"
 	"github.com/Tocyuki/rdq/internal/runner"
+	"github.com/Tocyuki/rdq/internal/state"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
 )
@@ -25,6 +26,13 @@ type executeHandlers struct {
 	// runner.ExecuteSQL via a small adapter that constructs the rdsdata
 	// client lazily.
 	executeSQL func(ctx context.Context, cfg aws.Config, target runner.Target, sql string) (*runner.Result, time.Duration, error)
+
+	// loadState is a seam for tests + the source of truth for the
+	// per-profile read-only policy. The execute handler re-reads
+	// state.json on every request (authoritative over any client-supplied
+	// value) so toggling the flag in Settings takes effect immediately
+	// without depending on the SPA to resend it.
+	loadState func() (*state.State, error)
 }
 
 func newExecuteHandlers(cache *awsCache, hist *history.Store) *executeHandlers {
@@ -32,6 +40,7 @@ func newExecuteHandlers(cache *awsCache, hist *history.Store) *executeHandlers {
 		awsCache:   cache,
 		history:    hist,
 		executeSQL: defaultExecuteSQL,
+		loadState:  state.Load,
 	}
 }
 
@@ -64,6 +73,15 @@ func (h *executeHandlers) execute(w http.ResponseWriter, r *http.Request) {
 	if req.Cluster == "" || req.Secret == "" || req.Database == "" {
 		writeJSONError(w, http.StatusBadRequest, errCodeBadRequest,
 			"cluster, secret, and database are required")
+		return
+	}
+
+	// Read-only gate: checked before touching AWS so a destructive
+	// attempt never even opens an SDK handle.
+	if h.isReadOnlyProfile(req.Profile) && !runner.IsReadOnlySQL(req.SQL) {
+		h.recordHistory(req, runner.ErrWriteBlocked, 0)
+		writeJSONError(w, http.StatusForbidden, errCodeReadOnly,
+			"read-only mode is on for this profile; toggle it off in Settings to run writes")
 		return
 	}
 
@@ -113,6 +131,27 @@ func (h *executeHandlers) execute(w http.ResponseWriter, r *http.Request) {
 		resp.Rows = [][]any{}
 	}
 	writeJSON(w, resp)
+}
+
+// isReadOnlyProfile resolves the per-profile read-only policy from
+// state.json. A missing flag (never toggled) defaults to TRUE so fresh
+// installs and unsaved profiles are always safe.
+func (h *executeHandlers) isReadOnlyProfile(profile string) bool {
+	if h.loadState == nil {
+		return true
+	}
+	st, err := h.loadState()
+	if err != nil {
+		// Failing closed is safer than failing open for a
+		// destructive-statement guard.
+		log.Printf("rdq gui: state.Load failed during read-only check: %v", err)
+		return true
+	}
+	ps := st.Get(profile)
+	if ps.IsReadOnly == nil {
+		return true
+	}
+	return *ps.IsReadOnly
 }
 
 // recordHistory writes a one-line JSONL entry to the history store. All

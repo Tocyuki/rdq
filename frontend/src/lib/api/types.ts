@@ -21,6 +21,14 @@ export interface Session {
    * ConnectionBar with a warning colour.
    */
   isProduction?: boolean
+  /**
+   * Tri-state read-only flag. undefined is treated as TRUE server-side
+   * (fresh installs are safe by default). When effectively true, the
+   * backend rejects any SQL whose leading keyword is not SELECT / WITH /
+   * SHOW / EXPLAIN / DESCRIBE / DESC / TABLE / VALUES with an
+   * errCodeReadOnly (HTTP 403).
+   */
+  isReadOnly?: boolean
 }
 
 export interface Health {

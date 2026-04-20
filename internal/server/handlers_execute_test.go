@@ -15,8 +15,24 @@ import (
 
 	"github.com/Tocyuki/rdq/internal/history"
 	"github.com/Tocyuki/rdq/internal/runner"
+	"github.com/Tocyuki/rdq/internal/state"
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
+
+// writableStateLoader returns a state where every profile is explicitly
+// marked NOT read-only. Used as the default for exec tests so the existing
+// write-path coverage still exercises the executeSQL seam unchanged.
+func writableStateLoader() func() (*state.State, error) {
+	falseVal := false
+	return func() (*state.State, error) {
+		return &state.State{
+			Profiles: map[string]state.ProfileState{
+				"dev":  {IsReadOnly: &falseVal},
+				"prod": {IsReadOnly: &falseVal},
+			},
+		}, nil
+	}
+}
 
 func newTestExecuteHandlers(t *testing.T) (*executeHandlers, string) {
 	t.Helper()
@@ -31,7 +47,9 @@ func newTestExecuteHandlers(t *testing.T) (*executeHandlers, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newExecuteHandlers(c, hist), hist.Path()
+	h := newExecuteHandlers(c, hist)
+	h.loadState = writableStateLoader()
+	return h, hist.Path()
 }
 
 func postJSON(t *testing.T, h http.HandlerFunc, path string, body any) *httptest.ResponseRecorder {
@@ -164,6 +182,97 @@ func TestExecuteMissingFieldsRejected(t *testing.T) {
 		if rr.Code != http.StatusBadRequest {
 			t.Errorf("status = %d for %+v, want 400", rr.Code, tc)
 		}
+	}
+}
+
+func TestExecuteBlocksWritesInReadOnlyMode(t *testing.T) {
+	h, histPath := newTestExecuteHandlers(t)
+	trueVal := true
+	h.loadState = func() (*state.State, error) {
+		return &state.State{
+			Profiles: map[string]state.ProfileState{
+				"dev": {IsReadOnly: &trueVal},
+			},
+		}, nil
+	}
+	// The executeSQL stub should never be reached in read-only mode.
+	h.executeSQL = func(_ context.Context, _ aws.Config, _ runner.Target, _ string) (*runner.Result, time.Duration, error) {
+		t.Fatal("executeSQL must not be called when the read-only gate fires")
+		return nil, 0, nil
+	}
+
+	rr := postJSON(t, h.execute, "/api/execute", ExecuteRequest{
+		Profile: "dev", Cluster: "arn:c", Secret: "arn:s", Database: "app",
+		SQL: "DELETE FROM users WHERE id = 1",
+	})
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", rr.Code, rr.Body.String())
+	}
+	var body ErrorDTO
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Code != errCodeReadOnly {
+		t.Errorf("code = %s, want %s", body.Error.Code, errCodeReadOnly)
+	}
+	// The attempt should still be recorded so the user can see they
+	// tried a blocked statement.
+	assertHistoryLines(t, histPath, 1, func(entries []history.Entry) {
+		if entries[0].Ok {
+			t.Errorf("expected Ok=false for blocked write")
+		}
+		if entries[0].ErrorMsg == "" {
+			t.Errorf("expected error_msg populated with the block reason")
+		}
+	})
+}
+
+func TestExecuteAllowsReadsInReadOnlyMode(t *testing.T) {
+	h, _ := newTestExecuteHandlers(t)
+	trueVal := true
+	h.loadState = func() (*state.State, error) {
+		return &state.State{
+			Profiles: map[string]state.ProfileState{
+				"dev": {IsReadOnly: &trueVal},
+			},
+		}, nil
+	}
+	called := false
+	h.executeSQL = func(_ context.Context, _ aws.Config, _ runner.Target, _ string) (*runner.Result, time.Duration, error) {
+		called = true
+		return &runner.Result{Columns: []string{"n"}, Rows: [][]any{{int64(1)}}}, time.Millisecond, nil
+	}
+
+	rr := postJSON(t, h.execute, "/api/execute", ExecuteRequest{
+		Profile: "dev", Cluster: "arn:c", Secret: "arn:s", Database: "app",
+		SQL: "SELECT 1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if !called {
+		t.Errorf("expected executeSQL to be reached for a SELECT in read-only mode")
+	}
+}
+
+func TestExecuteDefaultsToReadOnlyWhenFlagUnset(t *testing.T) {
+	h, _ := newTestExecuteHandlers(t)
+	// Profile exists in state.json but no IsReadOnly was ever set →
+	// default to read-only for safety.
+	h.loadState = func() (*state.State, error) {
+		return &state.State{
+			Profiles: map[string]state.ProfileState{
+				"dev": {Cluster: "arn:c"},
+			},
+		}, nil
+	}
+
+	rr := postJSON(t, h.execute, "/api/execute", ExecuteRequest{
+		Profile: "dev", Cluster: "arn:c", Secret: "arn:s", Database: "app",
+		SQL: "UPDATE users SET name = 'x'",
+	})
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (default read-only)", rr.Code)
 	}
 }
 

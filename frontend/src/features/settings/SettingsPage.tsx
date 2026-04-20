@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useState } from 'react'
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, Lock, Unlock } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,32 +10,34 @@ import { ModelPicker } from '@/features/ai/ModelPicker'
 import { useSession } from '@/hooks/useSession'
 import { endpoints } from '@/lib/api/endpoints'
 
-type ProductionTriState = 'unset' | 'true' | 'false'
+type TriState = 'unset' | 'true' | 'false'
 
-function triStateFromSession(v: boolean | undefined): ProductionTriState {
+function triStateFromSession(v: boolean | undefined): TriState {
   if (v === undefined) return 'unset'
   return v ? 'true' : 'false'
 }
 
-function triStateToBool(v: ProductionTriState): boolean | undefined {
+function triStateToBool(v: TriState): boolean | undefined {
   if (v === 'unset') return undefined
   return v === 'true'
 }
 
 /**
- * SettingsPage exposes the three pieces of per-profile configuration
- * that are too important to hide but too specific to belong on the
- * ConnectionBar: the Bedrock model, the response language, and the
- * production-environment flag that paints the ConnectionBar with a
- * warning colour. All three pass through PUT /api/session which
- * persists them to state.json so choices survive restarts.
+ * SettingsPage exposes per-profile preferences: Bedrock model + language,
+ * the production warning flag, and the read-only guard. All pass through
+ * PUT /api/session which persists them to state.json so choices survive
+ * restarts. The server treats the values as the authoritative source of
+ * truth for the execute gate.
  */
 export function SettingsPage() {
   const session = useSession()
   const [model, setModel] = useState(() => session.data?.bedrockModel ?? '')
   const [language, setLanguage] = useState(() => session.data?.bedrockLanguage ?? '')
-  const [production, setProduction] = useState<ProductionTriState>(() =>
+  const [production, setProduction] = useState<TriState>(() =>
     triStateFromSession(session.data?.isProduction),
+  )
+  const [readOnly, setReadOnly] = useState<TriState>(() =>
+    triStateFromSession(session.data?.isReadOnly),
   )
 
   const save = useMutation({
@@ -46,6 +48,7 @@ export function SettingsPage() {
         bedrockModel: model,
         bedrockLanguage: language,
         isProduction: triStateToBool(production),
+        isReadOnly: triStateToBool(readOnly),
       })
     },
     onSuccess: () => {
@@ -85,25 +88,58 @@ export function SettingsPage() {
         </div>
 
         <fieldset className="space-y-2">
+          <legend className="text-sm font-medium">Read-only mode</legend>
+          <p className="text-xs text-muted-foreground">
+            When enabled, only statements that begin with SELECT / WITH / SHOW / EXPLAIN /
+            DESCRIBE / DESC / TABLE / VALUES can be executed. Destructive operations
+            (INSERT / UPDATE / DELETE / ALTER / DROP / TRUNCATE / …) are rejected
+            before reaching AWS. The default is <em>on</em> so fresh installs are safe.
+          </p>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <TriStateOption
+              value="unset"
+              current={readOnly}
+              onPick={setReadOnly}
+              label="Unanswered (defaults to on)"
+            />
+            <TriStateOption
+              value="true"
+              current={readOnly}
+              onPick={setReadOnly}
+              label="Read-only (safe)"
+              icon={<Lock className="size-3" />}
+            />
+            <TriStateOption
+              value="false"
+              current={readOnly}
+              onPick={setReadOnly}
+              label="Allow writes"
+              icon={<Unlock className="size-3" />}
+              destructive
+            />
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-2">
           <legend className="text-sm font-medium">Production environment</legend>
           <p className="text-xs text-muted-foreground">
             When marked as production, the connection bar switches to a warning colour so
             destructive statements are less likely to slip in unnoticed.
           </p>
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            <ProductionOption
+            <TriStateOption
               value="unset"
               current={production}
               onPick={setProduction}
               label="Unanswered"
             />
-            <ProductionOption
+            <TriStateOption
               value="false"
               current={production}
               onPick={setProduction}
               label="Not production"
             />
-            <ProductionOption
+            <TriStateOption
               value="true"
               current={production}
               onPick={setProduction}
@@ -124,7 +160,7 @@ export function SettingsPage() {
   )
 }
 
-function ProductionOption({
+function TriStateOption({
   value,
   current,
   onPick,
@@ -132,9 +168,9 @@ function ProductionOption({
   icon,
   destructive,
 }: {
-  value: ProductionTriState
-  current: ProductionTriState
-  onPick: (v: ProductionTriState) => void
+  value: TriState
+  current: TriState
+  onPick: (v: TriState) => void
   label: string
   icon?: React.ReactNode
   destructive?: boolean

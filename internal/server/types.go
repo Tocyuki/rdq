@@ -9,6 +9,11 @@ package server
 // IsProduction is a tri-state pointer that mirrors state.ProfileState: nil =
 // the user has not answered, true / false = explicit choice. The SPA paints
 // the ConnectionBar with a warning colour when it is true.
+//
+// IsReadOnly mirrors state.ProfileState.IsReadOnly. The execute handler
+// treats a nil value as read-only enabled so fresh / unanswered profiles
+// default to the safe side; destructive statements are rejected with a
+// "read_only" error code. Users toggle it off in Settings.
 type SessionDTO struct {
 	Profile         string `json:"profile"`
 	Cluster         string `json:"cluster"`
@@ -17,6 +22,7 @@ type SessionDTO struct {
 	BedrockModel    string `json:"bedrockModel"`
 	BedrockLanguage string `json:"bedrockLanguage"`
 	IsProduction    *bool  `json:"isProduction,omitempty"`
+	IsReadOnly      *bool  `json:"isReadOnly,omitempty"`
 }
 
 // HealthDTO is the JSON body of /api/health.
