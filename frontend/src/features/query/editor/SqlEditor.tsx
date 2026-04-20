@@ -32,7 +32,13 @@ export function SqlEditor({ engineHint, schema, onRun }: Props) {
   const setSql = useUIStore((s) => s.setSql)
   const pending = useUIStore((s) => s.pendingEditorText)
   const clearPending = useUIStore((s) => s.clearEditorText)
+  const setEditorView = useUIStore((s) => s.setEditorView)
   const [view, setView] = useState<EditorView | null>(null)
+
+  useEffect(() => {
+    setEditorView(view)
+    return () => setEditorView(null)
+  }, [view, setEditorView])
 
   const engine: Engine = engineFromClusterEngine(engineHint)
   const schemaHint = useMemo(() => toSqlSchemaHint(schema), [schema])

@@ -12,7 +12,7 @@ import { useSchema } from '@/features/schema/useSchema'
 import { SchemaSidebar } from '@/features/schema/SchemaSidebar'
 import { ApiError } from '@/lib/api/client'
 import { ErrorCode } from '@/lib/api/error-codes'
-import { useUIStore } from '@/stores/uiStore'
+import { resolveRunSql, useUIStore } from '@/stores/uiStore'
 
 import { ConfirmRunDialog } from './ConfirmRunDialog'
 import { SqlEditor } from './editor/SqlEditor'
@@ -45,6 +45,7 @@ interface PendingConfirm {
 export function QueryPage() {
   const session = useSession()
   const sql = useUIStore((s) => s.sql)
+  const editorView = useUIStore((s) => s.editorView)
   const execute = useExecuteQuery()
   const schema = useSchema({
     profile: session.data?.profile ?? '',
@@ -63,7 +64,8 @@ export function QueryPage() {
       toast.error('Pick a profile, cluster, secret, and database first.')
       return
     }
-    if (!sql.trim()) {
+    const effectiveSql = resolveRunSql(sql, editorView)
+    if (!effectiveSql.trim()) {
       toast.error('Enter a SQL statement to run.')
       return
     }
@@ -73,7 +75,7 @@ export function QueryPage() {
       cluster: data.cluster,
       secret: data.secret,
       database: data.database,
-      sql,
+      sql: effectiveSql,
     }
     execute.mutate(args, {
       onError: (err) => {
@@ -82,7 +84,7 @@ export function QueryPage() {
         }
       },
     })
-  }, [session.data, sql, execute])
+  }, [session.data, sql, editorView, execute])
 
   const confirmAndRun = useCallback(() => {
     if (!pendingConfirm) return
@@ -108,7 +110,7 @@ export function QueryPage() {
           <div>
             <h1 className="text-sm font-semibold tracking-tight">Query</h1>
             <p className="text-xs text-muted-foreground">
-              Cmd / Ctrl + Enter to run
+              Cmd / Ctrl + Enter to run · selection, if any, runs alone
             </p>
           </div>
           <div className="flex items-center gap-2">

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { EditorView } from '@codemirror/view'
 
 import type { ExecuteResponseBody } from '@/lib/api/types'
 
@@ -36,6 +37,17 @@ interface UIState {
    */
   connectionDialogOpen: boolean
   setConnectionDialogOpen: (open: boolean) => void
+
+  /**
+   * editorView is the CodeMirror view instance. Kept in the store so
+   * the Run button (outside the editor subtree) can resolve the
+   * currently-selected text at run time without lifting state. Holding
+   * only the view — not the selection itself — keeps updates to
+   * mount/unmount frequency; selection is read on demand via
+   * `view.state.selection.main`.
+   */
+  editorView: EditorView | null
+  setEditorView: (view: EditorView | null) => void
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -51,4 +63,22 @@ export const useUIStore = create<UIState>((set) => ({
 
   connectionDialogOpen: false,
   setConnectionDialogOpen: (open) => set({ connectionDialogOpen: open }),
+
+  editorView: null,
+  setEditorView: (view) => set({ editorView: view }),
 }))
+
+/**
+ * resolveRunSql returns the SQL that should actually be dispatched to
+ * the Data API. When the user has a non-empty selection in the editor
+ * only that slice is run (common SQL-client QoL). Otherwise the full
+ * buffer is used. Keeping this as a pure function of (fullSql, view)
+ * keeps the Run button and Cmd/Ctrl+Enter paths in lockstep — both
+ * resolve the effective SQL the same way at dispatch time.
+ */
+export function resolveRunSql(fullSql: string, view: EditorView | null): string {
+  if (!view) return fullSql
+  const sel = view.state.selection.main
+  if (sel.empty) return fullSql
+  return view.state.sliceDoc(sel.from, sel.to)
+}
