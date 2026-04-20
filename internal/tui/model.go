@@ -233,6 +233,13 @@ type Model struct {
 	productionList       list.Model
 	productionPromptOpen bool
 
+	// Read-only mode flag. When true (the default when the profile has
+	// no stored answer) runStatement rejects any non-SELECT statement
+	// via runner.IsReadOnlySQL before touching the Data API. Toggleable
+	// via F8; hydrated from state.ProfileState.IsReadOnly on startup
+	// and after every profile switch.
+	isReadOnly bool
+
 	// Transient status message (e.g. CSV export confirmation, yy yank).
 	// flashToken is bumped every time flashMessage is set so a tea.Tick
 	// auto-clear can ignore stale ticks for messages that have already
@@ -454,6 +461,7 @@ func newModel(client *rdsdata.Client, tgt target, store *history.Store, bedrockC
 	if answered := m.loadProductionFlag(); !answered {
 		m.openProductionPrompt()
 	}
+	m.loadReadOnlyFlag()
 	return m
 }
 
@@ -734,7 +742,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.executing = true
 		m.lastErr = nil
 		m.flashMessage = ""
-		return tea.Batch(m.spin.Tick, runStatement(m.client, m.target, m.editor.Value(), m.readOnlyForRun())), true
+		return tea.Batch(m.spin.Tick, runStatement(m.client, m.target, m.editor.Value(), m.isReadOnly)), true
 
 	case key.Matches(msg, m.keys.Focus):
 		m.toggleFocus()
@@ -812,6 +820,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	case key.Matches(msg, m.keys.ToggleProduction):
 		m.openProductionPrompt()
 		return nil, true
+
+	case key.Matches(msg, m.keys.ToggleReadOnly):
+		return m.toggleReadOnly(), true
 
 	case key.Matches(msg, m.keys.ExportCSV):
 		m.handleExportCSV()
@@ -1599,7 +1610,18 @@ func (m Model) renderStatus() string {
 		keyStyle.Render("model"),
 		m.formatModelStatus(),
 	)
-	body := statusStyle.Render(line1 + "\n" + line2 + "\n" + line3 + "\n" + line4)
+	// A 5th line surfaces the read-only flag so users can see at a
+	// glance whether writes will be blocked. "OFF" is rendered muted so
+	// the line is unobtrusive when the guard is intentionally disabled.
+	readOnlyLabel := keyStyle.Render("writes")
+	var readOnlyValue string
+	if m.isReadOnly {
+		readOnlyValue = "🔒 read-only (F8 to allow)"
+	} else {
+		readOnlyValue = helpStyle.Render("allowed (F8 to lock)")
+	}
+	line5 := fmt.Sprintf("%s %s", readOnlyLabel, readOnlyValue)
+	body := statusStyle.Render(line1 + "\n" + line2 + "\n" + line3 + "\n" + line4 + "\n" + line5)
 
 	if m.isProduction {
 		// The banner stretches across the full inner width so it can
@@ -2746,6 +2768,7 @@ func (m *Model) applyProfileSwitch(profile string, cfg aws.Config) tea.Cmd {
 	// classified the picker opens automatically before any query can
 	// run.
 	answered := m.loadProductionFlag()
+	m.loadReadOnlyFlag()
 	m.layout()
 	if !answered {
 		m.openProductionPrompt()
@@ -3230,26 +3253,64 @@ func (m *Model) persistBedrockSettings() error {
 	return st.Save()
 }
 
-// readOnlyForRun resolves the per-profile read-only policy from state.json
-// at the moment of execution, so a toggle made in the GUI Settings page
-// (or by hand-editing state.json) is picked up by the next TUI run
-// without a restart. A nil flag — fresh install or a profile that has
-// never been touched — defaults to read-only ON for safety. Ephemeral
-// mode (no profile name) is also treated as read-only because we cannot
-// associate a policy with anonymous credentials.
-func (m *Model) readOnlyForRun() bool {
+// loadReadOnlyFlag hydrates m.isReadOnly from state.json for the active
+// profile. The flag defaults to ON when the profile has never been
+// answered (nil in state) or when we cannot read state — the same
+// "safe-by-default" stance the GUI execute handler takes. Ephemeral
+// mode (empty profile name) is also treated as read-only.
+func (m *Model) loadReadOnlyFlag() {
 	if m.target.profile == "" {
-		return true
+		m.isReadOnly = true
+		return
 	}
 	st, err := state.Load()
 	if err != nil {
-		return true
+		m.isReadOnly = true
+		return
 	}
 	ps := st.Get(m.target.profile)
 	if ps.IsReadOnly == nil {
-		return true
+		m.isReadOnly = true
+		return
 	}
-	return *ps.IsReadOnly
+	m.isReadOnly = *ps.IsReadOnly
+}
+
+// toggleReadOnly flips the read-only flag, persists the new value, and
+// flashes a status message. F8 binds here so users can switch between
+// "writes blocked" and "writes allowed" without leaving the TUI.
+// Unlike F7's Yes/No picker this is a direct two-state toggle because
+// the flag is a binary safety valve; the tri-state "unanswered" only
+// exists on disk as a default-safe placeholder.
+func (m *Model) toggleReadOnly() tea.Cmd {
+	m.isReadOnly = !m.isReadOnly
+	if err := m.persistIsReadOnly(m.isReadOnly); err != nil {
+		log.Printf("save is_read_only failed: %v", err)
+	}
+	if m.isReadOnly {
+		m.flashMessage = "🔒 read-only mode ON (writes blocked)"
+	} else {
+		m.flashMessage = "read-only mode OFF (writes allowed)"
+	}
+	return m.scheduleFlashClear()
+}
+
+// persistIsReadOnly writes IsReadOnly to the profile's state.json entry.
+// Ephemeral runs (empty profile) are a no-op — direct credentials do
+// not touch state at all.
+func (m *Model) persistIsReadOnly(value bool) error {
+	if m.target.profile == "" {
+		return nil
+	}
+	st, err := state.Load()
+	if err != nil {
+		return err
+	}
+	ps := st.Get(m.target.profile)
+	v := value
+	ps.IsReadOnly = &v
+	st.Set(m.target.profile, ps)
+	return st.Save()
 }
 
 // applyAskResult replaces the editor's contents with the AI-generated SQL,

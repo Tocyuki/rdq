@@ -18,6 +18,7 @@ type keyMap struct {
 	SwitchSecret     key.Binding
 	SwitchProfile    key.Binding
 	ToggleProduction key.Binding
+	ToggleReadOnly   key.Binding
 	ExportCSV        key.Binding
 	Clear            key.Binding
 	Help             key.Binding
@@ -78,6 +79,10 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("f7"),
 			key.WithHelp("F7", "toggle production flag"),
 		),
+		ToggleReadOnly: key.NewBinding(
+			key.WithKeys("f8"),
+			key.WithHelp("F8", "toggle read-only mode"),
+		),
 		ExportCSV: key.NewBinding(
 			key.WithKeys("ctrl+e"),
 			key.WithHelp("^E", "export csv"),
@@ -107,7 +112,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Run, k.Focus, k.ToggleView, k.Inspect},
 		{k.Ask, k.Assist, k.SwitchModel, k.SwitchLanguage},
-		{k.SwitchProfile, k.SwitchTarget, k.SwitchSecret, k.ToggleProduction},
+		{k.SwitchProfile, k.SwitchTarget, k.SwitchSecret, k.ToggleProduction, k.ToggleReadOnly},
 		{k.History, k.ExportCSV, k.Clear, k.Help, k.Quit},
 	}
 }

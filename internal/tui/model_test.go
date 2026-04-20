@@ -1767,3 +1767,67 @@ func TestProductionBannerInRenderStatus(t *testing.T) {
 		t.Errorf("PRODUCTION should not appear when flag is false:\n%s", out)
 	}
 }
+
+// TestLoadReadOnlyFlagDefaultsToTrue ensures profiles that have never
+// answered the question come up in read-only (safe) mode.
+func TestLoadReadOnlyFlagDefaultsToTrue(t *testing.T) {
+	m := setupProductionTest(t) // isolated RDQ_STATE_FILE + profile="testprofile"
+	m.loadReadOnlyFlag()
+	if !m.isReadOnly {
+		t.Errorf("expected isReadOnly=true when profile has no stored answer")
+	}
+}
+
+// TestToggleReadOnlyRoundTripsState walks the F8 toggle: the flag
+// flips in memory, state.json is updated, and a follow-up
+// loadReadOnlyFlag on a fresh Model recovers the persisted value.
+func TestToggleReadOnlyRoundTripsState(t *testing.T) {
+	m := setupProductionTest(t)
+	m.loadReadOnlyFlag()
+	if !m.isReadOnly {
+		t.Fatalf("precondition: expected default isReadOnly=true")
+	}
+
+	// Toggle off (allow writes).
+	if cmd := m.toggleReadOnly(); cmd == nil {
+		t.Error("toggleReadOnly should return a flash-clear cmd")
+	}
+	if m.isReadOnly {
+		t.Errorf("isReadOnly should be false after toggle")
+	}
+	if !strings.Contains(m.flashMessage, "OFF") {
+		t.Errorf("flash message should announce OFF, got %q", m.flashMessage)
+	}
+
+	// Reload on a fresh model — persisted value wins.
+	m2 := newModel(nil, target{profile: "testprofile"}, nil, nil, "", "", aws.Config{})
+	m2.loadReadOnlyFlag()
+	if m2.isReadOnly {
+		t.Errorf("expected persisted false to load as isReadOnly=false")
+	}
+
+	// Toggle back on.
+	m2.toggleReadOnly()
+	if !m2.isReadOnly {
+		t.Errorf("isReadOnly should be true again after second toggle")
+	}
+}
+
+// TestReadOnlyIndicatorInRenderStatus confirms the 5th status line
+// flips between "🔒 read-only" and "allowed" depending on m.isReadOnly.
+func TestReadOnlyIndicatorInRenderStatus(t *testing.T) {
+	m := setupProductionTest(t)
+	m.productionPromptOpen = false
+
+	m.isReadOnly = true
+	out := m.renderStatus()
+	if !strings.Contains(out, "read-only") {
+		t.Errorf("read-only indicator missing when isReadOnly=true:\n%s", out)
+	}
+
+	m.isReadOnly = false
+	out = m.renderStatus()
+	if !strings.Contains(out, "allowed") {
+		t.Errorf("\"allowed\" indicator missing when isReadOnly=false:\n%s", out)
+	}
+}
