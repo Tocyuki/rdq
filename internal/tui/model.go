@@ -25,6 +25,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -2226,11 +2227,35 @@ func composeAnalyzeText(analysis string) string {
 // editor while the review markdown sits inert behind it.
 func (m *Model) showAIOverlay(text string) {
 	m.explainText = text
-	m.explainVP.SetContent(text)
+	m.explainVP.SetContent(renderMarkdownForTerminal(text, m.explainVP.Width))
 	m.explainVP.GotoTop()
 	m.explainVP.SetXOffset(0)
 	m.explainOpen = true
 	m.pinResultsFocus()
+}
+
+// renderMarkdownForTerminal turns the AI-produced markdown into an
+// ANSI-styled blob for the viewport. Falls back to the raw text if
+// glamour fails (unknown width, render error) so the overlay always
+// displays *something* rather than blank. width ≤ 0 means "unknown
+// viewport size"; we pick a conservative default in that case so the
+// output does not word-wrap at zero columns.
+func renderMarkdownForTerminal(markdown string, width int) string {
+	if width <= 0 {
+		width = 100
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return markdown
+	}
+	out, err := r.Render(markdown)
+	if err != nil {
+		return markdown
+	}
+	return out
 }
 
 // composeExplainText assembles the final markdown shown in the explain

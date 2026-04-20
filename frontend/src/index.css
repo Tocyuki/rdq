@@ -1,5 +1,9 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* Typography plugin powers `prose` classes used by AiMarkdown for
+ * Review / Analyze / Explain responses. Tailwind v4 loads plugins via
+ * the @plugin directive instead of a config file. */
+@plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:is(.dark *));
 
