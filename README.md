@@ -57,18 +57,33 @@ The `gui` subcommand exposes a browser-based SQL client (React + Vite SPA embedd
 - **Ephemeral mode for direct credentials** — when no profile name is in play (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` only), `rdq` walks through the cluster / secret / database pickers from scratch every launch and writes nothing to `~/.rdq/state.json` or the history log. The status bar shows `(direct credentials · ephemeral)` so the mode is visible
 - **Friendly credentials error** — if no provider in the SDK chain can produce credentials, `rdq` exits with an actionable message instead of the raw SDK error
 
+### Safety features (TUI + GUI)
+
+Both modes share the same guards so destructive SQL is hard to run by accident:
+
+- **Read-only mode** (default **on** for fresh profiles) — only `SELECT` / `WITH` / `SHOW` / `EXPLAIN` / `DESCRIBE` / `DESC` / `TABLE` / `VALUES` can execute. Everything else is rejected before the request reaches AWS.
+  - TUI: toggle with **`F8`**; the status bar shows a **`RO`** marker when it is on.
+  - GUI: toggle in **Settings**; the connection bar shows a **Read-only** badge (or **Allow writes** when off).
+- **Production environment flag** — per profile. When set, the GUI connection bar flips to a warning colour and the TUI shows a matching indicator, so destructive statements stand out visually before you run them.
+- **Destructive-statement confirmation** — `DELETE` / `UPDATE` without a `WHERE` clause, and `TRUNCATE`, open a confirmation prompt (TUI) or dialog (GUI) with the exact statement. Nothing is sent to AWS until you acknowledge it. The guard understands line / block comments and string literals, so `UPDATE t SET col = '-- just a string'` is not misclassified as "commented-out WHERE".
+
+Flags are stored per profile in `~/.rdq/state.json` and survive restarts.
+
 ### GUI mode (browser-based SQL client)
 
 Launch with `rdq gui` (opens `http://127.0.0.1:8080` in your browser automatically; add `--no-open` to suppress). The GUI shares the same `internal/` engines as the TUI, so results, history, and schema caches are consistent across both surfaces.
 
-- **Connection wizard** — pick profile → cluster → secret → database from browser-side searchable lists; the selection persists to `~/.rdq/state.json` just like the TUI
-- **CodeMirror 6 SQL editor** — syntax highlighting, schema-aware autocomplete, `Cmd/Ctrl+Enter` to run
-- **Result viewer** with Table / JSON / Info tabs, row detail dialog, and CSV / JSON download
-- **History panel** — per-profile SQL log with substring search, favourites toggle, and "Load into editor"
-- **Schema sidebar** — filterable table/column tree; double-click to insert qualified names into the editor
-- **Bedrock AI dialogs** — Ask (natural language → SQL with multi-turn chat), Review (critique current SQL), Analyze (interpret last result), Explain (diagnose an error). Each response renders as Markdown with syntax-highlighted code blocks
-- **Security** — the server binds `127.0.0.1` only and enforces Origin / Host checks against the localhost allow-list; `--dev` temporarily adds `http://localhost:5173` so `cd frontend && npm run dev` proxying works during frontend development
-- **Graceful shutdown** — `SIGINT` / `SIGTERM` drains in-flight requests within 10 s
+- **Connection wizard** — pick profile → cluster → secret → database from browser-side searchable lists; the selection persists to `~/.rdq/state.json` just like the TUI. Each field also has a **one-click switcher** in the connection bar (Profile / Cluster / Database badges) so you can rebind without reopening the full wizard.
+- **CodeMirror 6 SQL editor** — syntax highlighting, schema-aware autocomplete, `Cmd/Ctrl+Enter` to run. If text is selected, only the selection runs.
+- **Result viewer** with Table / JSON / Info tabs, row detail dialog, CSV / JSON download, and one-click **Copy to clipboard** (CSV or JSON).
+- **Find in result** — `Cmd/Ctrl+F` opens a search bar over the Result Table. `Enter` / `Shift+Enter` step to the next / previous match (with a running `N / M` counter), matches are highlighted in the table, and the active match is accented and scrolled into view. The same substring is also highlighted in the schema sidebar's filter.
+- **Resizable layout** — drag the vertical handle to resize Schema ↔ Editor+Result, and the horizontal handle to resize Editor ↔ Result. Your layout is saved to `localStorage` and restored on reload.
+- **History panel** — per-profile SQL log with substring search, favourites toggle, "Load into editor", and per-row **Copy**. Duplicate statements are de-duplicated on append: running the same SQL twice keeps one entry with the latest timestamp (favourite status is preserved).
+- **Schema sidebar** — filterable table / column tree; double-click to insert qualified names into the editor; click a row to copy the qualified identifier to the clipboard.
+- **Bedrock AI dialogs** — Ask (natural language → SQL with multi-turn chat), Review (critique current SQL), Analyze (interpret last result), Explain (diagnose an error). Each response renders as Markdown with syntax-highlighted code blocks, and adapts to light / dark theme. Explain opens automatically with the last error pre-filled when you click the **Explain** button.
+- **Safety badges** — the connection bar always shows **Read-only** or **Allow writes** and flips to a warning palette when the active profile is flagged as production. See [Safety features](#safety-features-tui--gui).
+- **Security** — the server binds `127.0.0.1` only and enforces Origin / Host checks against the localhost allow-list; `--dev` temporarily adds `http://localhost:5173` so `cd frontend && npm run dev` proxying works during frontend development.
+- **Graceful shutdown** — `SIGINT` / `SIGTERM` drains in-flight requests within 10 s.
 
 ## Installation
 
@@ -134,6 +149,7 @@ Only applies to `rdq gui`. The TUI uses neither flag.
 | `^L` | Switch Bedrock response language |
 | `^H` | SQL history picker (substring filter; `^F` toggles favourite on selected entry) |
 | `^E` | Export the current result to CSV in the working directory |
+| `F8` | Toggle read-only mode (shows a `RO` marker in the status bar while on) |
 | `Esc` | Clear error / close current overlay |
 | `?` | Toggle full help |
 | `^C` | Quit |
@@ -222,7 +238,7 @@ When you start `rdq` without a profile name in play (no `--profile`, no `AWS_PRO
 
 | Path | Purpose |
 | --- | --- |
-| `~/.rdq/state.json` | Per-profile cache: cluster ARN, secret ARN, database, Bedrock model, response language, cluster→secret map, database history |
+| `~/.rdq/state.json` | Per-profile cache: cluster ARN, secret ARN, database, Bedrock model, response language, cluster→secret map, database history, plus the `isReadOnly` / `isProduction` safety flags |
 | `~/.rdq/history.jsonl` | SQL execution history (append-only JSONL); each entry stores its profile + database so the picker can filter |
 | `~/.rdq/schema/<hash>.json` | Cached `information_schema` snapshot per (cluster, database) pair |
 
