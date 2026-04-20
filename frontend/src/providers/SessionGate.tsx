@@ -1,36 +1,43 @@
-import { useState } from 'react'
+import { useEffect, useRef } from 'react'
 
 import { ConnectionDialog } from '@/features/connection/ConnectionDialog'
 import { sessionIsComplete, useSession } from '@/hooks/useSession'
+import { useUIStore } from '@/stores/uiStore'
 
 /**
- * SessionGate is the app-level guardrail: as soon as /api/session resolves
- * with an incomplete connection the dialog opens so the user is nudged
- * into filling profile/cluster/secret/database before anything else can
- * fail on empty values.
+ * SessionGate owns the one and only <ConnectionDialog /> instance. Both
+ * the first-render auto-open (triggered here when the server reports an
+ * incomplete session) and the explicit triggers from ConnectionBar (the
+ * "Change" button and profile-switch follow-ups) write to the same
+ * Zustand flag, so only one overlay is ever visible at a time.
  *
- * The open state is derived rather than an effect-driven useState write:
- * if the session is loaded and incomplete, show the dialog, unless the
- * user has already dismissed it this session. This keeps React 19's
- * "no setState in effects" rule satisfied and prevents a cascading render
- * on first paint.
+ * The auto-open is fire-once per browser page lifetime (guarded by a
+ * ref). Subsequent incomplete sessions — e.g. the user switching
+ * profiles — are reopened explicitly by ConnectionBar, which lets the
+ * user dismiss the dialog once without the gate immediately reopening
+ * it in a loop.
  */
 export function SessionGate({ children }: { children: React.ReactNode }) {
   const session = useSession()
-  const [dismissed, setDismissed] = useState(false)
+  const open = useUIStore((s) => s.connectionDialogOpen)
+  const setOpen = useUIStore((s) => s.setConnectionDialogOpen)
+  const autoOpenedRef = useRef(false)
 
-  const needsSetup = session.isSuccess && !sessionIsComplete(session.data)
-  const open = needsSetup && !dismissed
+  useEffect(() => {
+    if (
+      session.isSuccess &&
+      !sessionIsComplete(session.data) &&
+      !autoOpenedRef.current
+    ) {
+      autoOpenedRef.current = true
+      setOpen(true)
+    }
+  }, [session.isSuccess, session.data, setOpen])
 
   return (
     <>
       {children}
-      <ConnectionDialog
-        open={open}
-        onOpenChange={(next) => {
-          if (!next) setDismissed(true)
-        }}
-      />
+      <ConnectionDialog open={open} onOpenChange={setOpen} />
     </>
   )
 }

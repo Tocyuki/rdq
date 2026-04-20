@@ -1,11 +1,9 @@
-import { useState } from 'react'
 import { AlertTriangle, Lock, Plug } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import { ConnectionDialog } from '@/features/connection/ConnectionDialog'
 import {
   ClusterBadge,
   DatabaseBadge,
@@ -14,6 +12,7 @@ import {
 import { useSaveSession, useSession } from '@/hooks/useSession'
 import type { Session } from '@/lib/api/types'
 import { cn } from '@/lib/utils'
+import { useUIStore } from '@/stores/uiStore'
 
 /**
  * shortARN returns the tail segment of an AWS ARN so the connection bar
@@ -31,7 +30,10 @@ function shortARN(arn: string) {
 export function ConnectionBar() {
   const session = useSession()
   const save = useSaveSession()
-  const [dialogOpen, setDialogOpen] = useState(false)
+  // The <ConnectionDialog /> itself is mounted once inside SessionGate.
+  // ConnectionBar just drives its open state via Zustand so we never
+  // render two overlays at once during a profile switch.
+  const setDialogOpen = useUIStore((s) => s.setConnectionDialogOpen)
 
   const data: Session = session.data ?? {
     profile: '',
@@ -183,7 +185,6 @@ export function ConnectionBar() {
         <Plug />
         {data.profile && data.cluster && data.secret && data.database ? 'Change' : 'Connect'}
       </Button>
-      <ConnectionDialog open={dialogOpen} onOpenChange={setDialogOpen} />
     </header>
   )
 }

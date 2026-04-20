@@ -25,6 +25,17 @@ interface UIState {
 
   lastResult: ExecuteResponseBody | null
   setLastResult: (r: ExecuteResponseBody | null) => void
+
+  /**
+   * connectionDialogOpen centralises the open state of the
+   * <ConnectionDialog /> so the dialog lives in exactly one place
+   * (SessionGate) while both SessionGate (first-load auto-open) and
+   * ConnectionBar (profile-switch / "Change" button) can drive it.
+   * Previously the dialog was mounted twice, which stacked two backdrops
+   * on profile switches.
+   */
+  connectionDialogOpen: boolean
+  setConnectionDialogOpen: (open: boolean) => void
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -37,4 +48,7 @@ export const useUIStore = create<UIState>((set) => ({
 
   lastResult: null,
   setLastResult: (r) => set({ lastResult: r }),
+
+  connectionDialogOpen: false,
+  setConnectionDialogOpen: (open) => set({ connectionDialogOpen: open }),
 }))
