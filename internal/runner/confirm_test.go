@@ -1,6 +1,9 @@
 package runner
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNeedsConfirmation(t *testing.T) {
 	cases := []struct {
@@ -52,7 +55,7 @@ func TestNeedsConfirmation(t *testing.T) {
 			if got != tc.wantNeed {
 				t.Fatalf("NeedsConfirmation(%q) need = %v, want %v (reason %q)", tc.sql, got, tc.wantNeed, reason)
 			}
-			if tc.wantNeed && tc.reasonHint != "" && !contains(reason, tc.reasonHint) {
+			if tc.wantNeed && tc.reasonHint != "" && !strings.Contains(reason, tc.reasonHint) {
 				t.Errorf("reason = %q, want to contain %q", reason, tc.reasonHint)
 			}
 		})
@@ -83,16 +86,3 @@ func TestStripSQLNoise(t *testing.T) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && indexOf(s, substr) >= 0
-}
-
-func indexOf(s, substr string) int {
-	n := len(substr)
-	for i := 0; i+n <= len(s); i++ {
-		if s[i:i+n] == substr {
-			return i
-		}
-	}
-	return -1
-}

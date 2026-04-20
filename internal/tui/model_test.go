@@ -1825,7 +1825,7 @@ func TestConfirmRunPromptGatesDestructiveStatements(t *testing.T) {
 	var model tea.Model = m
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyF5})
 	m = model.(Model)
-	if !m.confirmRunPromptOpen {
+	if !(m.pendingConfirmSQL != "") {
 		t.Fatalf("expected confirm prompt to open for DELETE without WHERE")
 	}
 	if m.executing {
@@ -1841,7 +1841,7 @@ func TestConfirmRunPromptGatesDestructiveStatements(t *testing.T) {
 	// Esc dismisses without running.
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = model.(Model)
-	if m.confirmRunPromptOpen {
+	if (m.pendingConfirmSQL != "") {
 		t.Errorf("Esc should close the confirm prompt")
 	}
 	if m.executing {
@@ -1853,7 +1853,7 @@ func TestConfirmRunPromptGatesDestructiveStatements(t *testing.T) {
 	model = m
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyF5})
 	m = model.(Model)
-	if m.confirmRunPromptOpen {
+	if (m.pendingConfirmSQL != "") {
 		t.Errorf("safe UPDATE should not trigger the confirm prompt")
 	}
 	if !m.executing {

@@ -240,15 +240,14 @@ type Model struct {
 	// and after every profile switch.
 	isReadOnly bool
 
-	// Confirm-run prompt state. When the user presses F5/^R on a
-	// DELETE/UPDATE without WHERE (or a TRUNCATE), runner.NeedsConfirmation
-	// flips confirmRunPromptOpen=true and stashes the warning reason so
-	// a footer banner can render it. Enter/y proceeds with the staged
-	// SQL; Esc/n cancels. pendingConfirmSQL captures the statement so
-	// further edits during the prompt do not change what runs.
-	confirmRunPromptOpen bool
-	confirmRunReason     string
-	pendingConfirmSQL    string
+	// Confirm-run prompt state. When F5/^R lands on a destructive
+	// statement (DELETE/UPDATE without WHERE or TRUNCATE) we stash the
+	// exact SQL and a human reason so the prompt renderer can echo them
+	// back. `pendingConfirmSQL != ""` is the single source of truth for
+	// "prompt is open" — avoid adding a parallel bool that has to stay
+	// in sync.
+	confirmRunReason  string
+	pendingConfirmSQL string
 
 	// Transient status message (e.g. CSV export confirmation, yy yank).
 	// flashToken is bumped every time flashMessage is set so a tea.Tick
@@ -693,7 +692,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.updateDatabasePicker(msg))
 		case m.productionPromptOpen:
 			cmds = append(cmds, m.updateProductionPrompt(msg))
-		case m.confirmRunPromptOpen:
+		case m.pendingConfirmSQL != "":
 			cmds = append(cmds, m.updateConfirmRunPrompt(msg))
 		case m.modelPickerOpen:
 			cmds = append(cmds, m.updateModelPicker(msg))
@@ -748,12 +747,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return tea.Quit, true
 
 	case key.Matches(msg, m.keys.Run):
-		if m.executing || m.confirmRunPromptOpen {
+		if m.executing || m.pendingConfirmSQL != "" {
 			return nil, true
 		}
 		sql := m.editor.Value()
 		if need, reason := runner.NeedsConfirmation(sql); need {
-			m.confirmRunPromptOpen = true
 			m.confirmRunReason = reason
 			m.pendingConfirmSQL = sql
 			m.flashMessage = ""
@@ -1558,10 +1556,9 @@ func (m Model) View() string {
 		}, "\n")
 	}
 
-	if m.confirmRunPromptOpen {
-		// Destructive-statement warning: show the reason, preview the
-		// staged SQL, and hint at the y/enter/esc keys. errorStyle
-		// paints it in red to match the gravity of the prompt.
+	if m.pendingConfirmSQL != "" {
+		// Destructive-statement warning: reason + staged SQL preview +
+		// keybinding hint. errorStyle paints the banner red.
 		banner := errorStyle.Render("⚠  " + m.confirmRunReason)
 		preview := jsonStyle.Render(m.pendingConfirmSQL)
 		hint := helpStyle.Render("enter / y = run anyway   ·   esc / n = cancel")
@@ -3364,12 +3361,10 @@ func (m *Model) updateConfirmRunPrompt(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter", "y", "Y":
 		sql := m.pendingConfirmSQL
-		m.confirmRunPromptOpen = false
 		m.confirmRunReason = ""
 		m.pendingConfirmSQL = ""
 		return m.startRun(sql)
 	case "esc", "n", "N", "ctrl+c":
-		m.confirmRunPromptOpen = false
 		m.confirmRunReason = ""
 		m.pendingConfirmSQL = ""
 		m.flashMessage = "run cancelled"

@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 
 import { ApiError } from '@/lib/api/client'
 import { endpoints } from '@/lib/api/endpoints'
+import { ErrorCode } from '@/lib/api/error-codes'
 import type { ExecuteResponseBody } from '@/lib/api/types'
 import { useUIStore } from '@/stores/uiStore'
 
@@ -41,11 +42,11 @@ export function useExecuteQuery() {
     },
     onError: (err, vars) => {
       qc.invalidateQueries({ queryKey: ['history', vars.profile, vars.database] })
-      if (err instanceof ApiError && err.code === 'confirmation_required') {
+      if (err instanceof ApiError && err.code === ErrorCode.ConfirmationRequired) {
         // QueryPage opens the confirmation dialog — no global toast.
         return
       }
-      if (err instanceof ApiError && err.code === 'read_only') {
+      if (err instanceof ApiError && err.code === ErrorCode.ReadOnly) {
         toast.error('Read-only mode is on — destructive statements are blocked.', {
           description: 'Toggle "Allow writes" in Settings to run this query.',
         })

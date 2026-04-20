@@ -11,6 +11,7 @@ import { ReviewDialog } from '@/features/ai/ReviewDialog'
 import { useSchema } from '@/features/schema/useSchema'
 import { SchemaSidebar } from '@/features/schema/SchemaSidebar'
 import { ApiError } from '@/lib/api/client'
+import { ErrorCode } from '@/lib/api/error-codes'
 import { useUIStore } from '@/stores/uiStore'
 
 import { ConfirmRunDialog } from './ConfirmRunDialog'
@@ -76,7 +77,7 @@ export function QueryPage() {
     }
     execute.mutate(args, {
       onError: (err) => {
-        if (err instanceof ApiError && err.code === 'confirmation_required') {
+        if (err instanceof ApiError && err.code === ErrorCode.ConfirmationRequired) {
           setPendingConfirm({ args, reason: err.message })
         }
       },
