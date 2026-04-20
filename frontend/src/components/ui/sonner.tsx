@@ -1,11 +1,12 @@
 import { Toaster as Sonner, type ToasterProps } from 'sonner'
 
 /**
- * Toaster is rdq's standard toast host. We keep the default "top-right"
- * placement so the connection banner at the top of the screen does not
- * overlap toasts, and enable richColors so errors are immediately visually
- * distinct from informational toasts.
+ * Toaster is rdq's standard toast host. bottom-right keeps the row of
+ * header actions (Ask / Review / Analyze / Explain / Run, plus the
+ * Change button on ConnectionBar) unobstructed — a toast that sits
+ * on top of those buttons blocks further interaction until it fades.
+ * richColors makes errors visually distinct from info toasts.
  */
 export function Toaster(props: ToasterProps) {
-  return <Sonner richColors position="top-right" {...props} />
+  return <Sonner richColors position="bottom-right" {...props} />
 }
