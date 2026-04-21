@@ -41,10 +41,28 @@ type Snapshot struct {
 	Columns   []Column  `json:"columns"`
 }
 
-// fetchQuery returns columns from information_schema in a form that works on
-// both Aurora MySQL and Aurora PostgreSQL. Reserved words are uppercased so
-// MySQL is happy; PostgreSQL is case-insensitive for unquoted identifiers so
-// the same query parses cleanly there too.
+// fetchQueryFiltered joins information_schema.schemata to drop schemas
+// owned by Aurora-managed system roles (`rdsadmin`) and the PostgreSQL
+// built-in pseudo-owner of catalog schemas (`pg_database_owner`). These
+// two consistently surface `information_schema` and `pg_catalog` as
+// noise in the TUI / GUI sidebars and in AI schema prompts — hiding
+// them upstream keeps the display focused on application schemas.
+//
+// `information_schema.schemata.schema_owner` is a PostgreSQL-specific
+// column (the SQL standard defines the table but not the column), so on
+// Aurora MySQL this query fails with "Unknown column" and the caller
+// transparently falls back to fetchQuery.
+const fetchQueryFiltered = `SELECT c.TABLE_SCHEMA, c.TABLE_NAME, c.COLUMN_NAME, c.DATA_TYPE
+FROM information_schema.COLUMNS c
+JOIN information_schema.SCHEMATA s ON s.SCHEMA_NAME = c.TABLE_SCHEMA
+WHERE s.SCHEMA_OWNER NOT IN ('rdsadmin', 'pg_database_owner')
+ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION`
+
+// fetchQuery is the fallback used when fetchQueryFiltered is rejected
+// (most commonly on Aurora MySQL, which has no schema_owner column).
+// Reserved words are uppercased so MySQL is happy; PostgreSQL is
+// case-insensitive for unquoted identifiers so the same query parses
+// cleanly there too.
 const fetchQuery = `SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE
 FROM information_schema.COLUMNS
 ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION`
@@ -53,16 +71,19 @@ ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION`
 // database and returns a Snapshot. Caller is expected to wrap network errors
 // with retry semantics if needed; this function returns them unwrapped so the
 // TUI can decide whether to fall back to an empty schema.
+//
+// The owner-filtered query is attempted first so PostgreSQL users never
+// see `information_schema` / `pg_catalog` noise in the sidebar. On the
+// first error (typically Aurora MySQL, which lacks schema_owner) it
+// retries with the simple query; only if the retry also fails does the
+// error propagate.
 func Fetch(ctx context.Context, client *rdsdata.Client, cluster, secret, database string) (*Snapshot, error) {
-	out, err := client.ExecuteStatement(ctx, &rdsdata.ExecuteStatementInput{
-		ResourceArn:           aws.String(cluster),
-		SecretArn:             aws.String(secret),
-		Database:              aws.String(database),
-		Sql:                   aws.String(fetchQuery),
-		IncludeResultMetadata: true,
-	})
+	out, err := executeFetch(ctx, client, cluster, secret, database, fetchQueryFiltered)
 	if err != nil {
-		return nil, fmt.Errorf("fetch information_schema: %w", err)
+		out, err = executeFetch(ctx, client, cluster, secret, database, fetchQuery)
+		if err != nil {
+			return nil, fmt.Errorf("fetch information_schema: %w", err)
+		}
 	}
 
 	snapshot := &Snapshot{
@@ -86,6 +107,18 @@ func Fetch(ctx context.Context, client *rdsdata.Client, cluster, secret, databas
 		snapshot.Columns = append(snapshot.Columns, col)
 	}
 	return snapshot, nil
+}
+
+// executeFetch is the thin Data API wrapper shared by Fetch's primary
+// and fallback paths. Kept un-exported; production callers use Fetch.
+func executeFetch(ctx context.Context, client *rdsdata.Client, cluster, secret, database, sql string) (*rdsdata.ExecuteStatementOutput, error) {
+	return client.ExecuteStatement(ctx, &rdsdata.ExecuteStatementInput{
+		ResourceArn:           aws.String(cluster),
+		SecretArn:             aws.String(secret),
+		Database:              aws.String(database),
+		Sql:                   aws.String(sql),
+		IncludeResultMetadata: true,
+	})
 }
 
 // stringField extracts a string value from an RDS Data API Field, returning

@@ -1257,12 +1257,15 @@ func (m *Model) layout() {
 	if m.width <= 0 || m.height <= 0 {
 		return
 	}
-	statusH := 4
+	// renderStatus emits five lines: profile/region, cluster/db, secret,
+	// model, and writes (the F8 read-only indicator). In production mode
+	// the PRODUCTION banner adds a sixth line above them. layout() must
+	// reserve exactly this many rows, otherwise the editor + results
+	// overflow by one line and the terminal scrolls the top of the
+	// status bar out of view (the `profile` / `region` row goes first).
+	statusH := 5
 	if m.isProduction {
-		// Production banner adds one line to the status bar, so we
-		// must shrink the available content region by the same amount
-		// to avoid the editor / results being cut off at the bottom.
-		statusH = 5
+		statusH = 6
 	}
 	helpH := 1
 	footerH := 1
