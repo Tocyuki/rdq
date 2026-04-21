@@ -37,14 +37,18 @@ jobs:
       # HEAD so the repo stays clean between releases.
       - id: extract-pr
         if: steps.tagpr.outputs.pull_request != ''
+        env:
+          HEAD_REF: ${{ fromJSON(steps.tagpr.outputs.pull_request).head.ref }}
         run: |
-          echo "head_ref=$(echo '${{ steps.tagpr.outputs.pull_request }}' | jq -r '.head.ref')" >> "$GITHUB_OUTPUT"
+          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
 
       - name: Checkout tagpr release PR branch
         if: steps.extract-pr.outputs.head_ref != ''
+        env:
+          HEAD_REF: ${{ steps.extract-pr.outputs.head_ref }}
         run: |
-          git fetch origin "${{ steps.extract-pr.outputs.head_ref }}"
-          git checkout "${{ steps.extract-pr.outputs.head_ref }}"
+          git fetch origin "$HEAD_REF"
+          git checkout "$HEAD_REF"
 
       - name: Set up Node (for release PR bundle)
         if: steps.extract-pr.outputs.head_ref != ''
