@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.0.5](https://github.com/Tocyuki/rdq/compare/v0.0.4...v0.0.5) - 2026-04-21
+- feat(ask): one-shot natural-language SQL subcommand by @Tocyuki in https://github.com/Tocyuki/rdq/pull/16
+- feat(schema): filter system-owned schemas, group GUI sidebar, fix TUI status-bar clipping by @Tocyuki in https://github.com/Tocyuki/rdq/pull/17
+
 ## [v0.0.4](https://github.com/Tocyuki/rdq/compare/v0.0.3...v0.0.4) - 2026-04-21
 - ci(tagpr): skip bundle push when tagpr is cutting a tag by @Tocyuki in https://github.com/Tocyuki/rdq/pull/14
 
