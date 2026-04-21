@@ -87,12 +87,17 @@ Launch with `rdq gui` (opens `http://127.0.0.1:8080` in your browser automatical
 
 ## Installation
 
-> [!IMPORTANT]
-> The `rdq gui` subcommand relies on a compiled frontend bundle that is embedded into the binary at build time. `go install` does **not** run the frontend build step, so a binary installed that way only supports `rdq` (TUI) and `rdq exec`; `rdq gui` will refuse to start with a pointer to a working install method. Pick one of the options below based on what you need.
+### `go install` (recommended)
 
-### Prebuilt release binaries (recommended)
+```bash
+go install github.com/Tocyuki/rdq/cmd/rdq@latest
+```
 
-Download the tarball for your OS / arch from the [GitHub Releases page](https://github.com/Tocyuki/rdq/releases) and extract the `rdq` binary onto your `$PATH`. Release builds bundle the React SPA, so **TUI + `exec` + GUI all work out of the box**.
+Tagged releases include the compiled frontend bundle, so `rdq` (TUI), `rdq exec`, and `rdq gui` all work out of the box. Pinning a non-release revision (`@main`, `@<commit-sha>`) still installs a usable TUI / `exec` binary, but `rdq gui` will exit with an explanatory error because the frontend bundle is only committed to release tag commits.
+
+### Prebuilt release binaries
+
+Download the tarball for your OS / arch from the [GitHub Releases page](https://github.com/Tocyuki/rdq/releases) and extract the `rdq` binary onto your `$PATH`.
 
 ### Build from source
 
@@ -105,15 +110,7 @@ make build           # builds the frontend, copies it into internal/server/dist/
 ./rdq --help
 ```
 
-`make build` is the only build path that produces a fully working `rdq gui`. `make go-build` is a faster Go-only rebuild that relies on whatever `internal/server/dist` currently contains.
-
-### `go install` (TUI / CLI only)
-
-```bash
-go install github.com/Tocyuki/rdq/cmd/rdq@latest
-```
-
-Use this when you only need `rdq` (TUI), `rdq exec`, or `rdq ask`. `rdq gui` launched from a `go install` binary will exit with an explanatory error because the embedded frontend assets are missing.
+`make build` is the one source-build path that produces a fully working `rdq gui`. `make go-build` is a faster Go-only rebuild that reuses whatever assets `internal/server/dist/` currently contains.
 
 ## Usage
 
