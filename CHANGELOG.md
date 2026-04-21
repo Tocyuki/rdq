@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.0.3](https://github.com/Tocyuki/rdq/compare/v0.0.2...v0.0.3) - 2026-04-21
+- feat: rdq exec CLI, IAM docs, frontend embed guard, and go install @latest GUI support by @Tocyuki in https://github.com/Tocyuki/rdq/pull/9
+- ci(tagpr): fix shell injection on PR body with apostrophe by @Tocyuki in https://github.com/Tocyuki/rdq/pull/11
+- ci(tagpr): re-checkout release PR branch via actions/checkout by @Tocyuki in https://github.com/Tocyuki/rdq/pull/13
+
 ## [v0.0.2](https://github.com/Tocyuki/rdq/compare/v0.0.1...v0.0.2) - 2026-04-21
 - feat: add GUI mode (browser-based SQL client) with find-in-page, safety gates, and resizable layout by @Tocyuki in https://github.com/Tocyuki/rdq/pull/5
 - fix(ci): sync frontend lockfile and add frontend CI job by @Tocyuki in https://github.com/Tocyuki/rdq/pull/7
