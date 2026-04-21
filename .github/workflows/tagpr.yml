@@ -35,8 +35,14 @@ jobs:
       # `rdq gui` without the SPA assets going missing. The cleanup
       # workflow (post-release.yml) then removes the bundle from main
       # HEAD so the repo stays clean between releases.
+      # The `tag` guard is load-bearing: tagpr populates `pull_request`
+      # in BOTH the "open/update release PR" mode (tag empty) and the
+      # "tag just cut after release PR merge" mode (tag set, PR already
+      # merged → branch deleted). Without the guard the bundle-push
+      # steps below try to checkout the deleted branch and fail,
+      # aborting the job before GoReleaser runs.
       - id: extract-pr
-        if: steps.tagpr.outputs.pull_request != ''
+        if: steps.tagpr.outputs.pull_request != '' && steps.tagpr.outputs.tag == ''
         env:
           HEAD_REF: ${{ fromJSON(steps.tagpr.outputs.pull_request).head.ref }}
         run: |
