@@ -17,7 +17,7 @@
 - Get automatic, in-context error explanations whenever a query fails
 - Switch between AWS profiles, clusters, secrets, Bedrock models, and response languages without leaving the TUI
 
-The `gui` subcommand exposes a browser-based SQL client (React + Vite SPA embedded in the binary) that delivers the same core experience: SQL execution, result viewing, CSV / JSON export, schema browsing, history, and Bedrock-assisted Ask / Review / Analyze / Explain flows. The `exec` subcommand runs a single statement one-shot for scripts and CI pipelines, sharing the same safety guards as the TUI / GUI. `ask` remains a placeholder stub pending a future release.
+The `gui` subcommand exposes a browser-based SQL client (React + Vite SPA embedded in the binary) that delivers the same core experience: SQL execution, result viewing, CSV / JSON export, schema browsing, history, and Bedrock-assisted Ask / Review / Analyze / Explain flows. The `exec` subcommand runs a single statement one-shot for scripts and CI pipelines, sharing the same safety guards as the TUI / GUI. The `ask` subcommand layers Bedrock on top of `exec`: pass a natural-language prompt and `rdq` generates SQL via Amazon Bedrock and runs it through the same pipeline.
 
 ## Features
 
@@ -171,6 +171,39 @@ For writes, `(N rows affected)` is printed to **stderr** so `stdout` stays clean
 | `3` | Read-only mode blocked a write statement |
 | `4` | Destructive statement not confirmed (`--yes` missing in non-TTY, or interactive rejection) |
 | `5` | Timed out after two minutes |
+
+### ask subcommand
+
+One-shot natural-language → SQL → execute flow for ad-hoc "count the rows" questions and CI pipelines that want Aurora answers without hand-writing SQL. The generated statement is funnelled through the same read-only gate, destructive-statement confirmation, and per-profile history as `exec`.
+
+```bash
+rdq ask "count active users signed up this week"
+rdq ask "top 10 slowest queries in pg_stat_statements" --output json
+rdq ask -q "list the schemas"                                                # result-only output
+rdq ask -n "delete sessions expired before 2026-01-01" | rdq exec --file -   # dry-run → pipe
+rdq --profile writable ask -y "delete sessions expired before 2026-01-01"
+```
+
+| Flag | Short | Default | Description |
+| --- | --- | --- | --- |
+| `<prompt>` (positional, variadic) | | | Natural-language request. Multiple tokens are joined with spaces so quoting is optional. |
+| `--output` | `-o` | `table` | Result output format: `table` (psql-style), `json`, or `csv`. |
+| `--dry-run` | `-n` | `false` | Print the generated SQL to stdout (bare, no header) and exit without executing. Handy for piping into `rdq exec --file -`. |
+| `--quiet` | `-q` | `false` | Suppress the `-- Generated SQL:` echo on stderr. Error messages and `(N rows affected)` still go to stderr. Ignored with `--dry-run`. |
+| `--yes` | `-y` | `false` | Skip confirmation for destructive statements (same rules as `exec`). |
+
+The generated SQL is always echoed to **stderr** as `-- Generated SQL:\n<sql>` so `stdout` stays a clean data stream for piping. A first run against a new database is more accurate if you have already seeded the schema cache: launch `rdq tui` once and let the background fetch populate `~/.rdq/schema/<hash>.json`. Without a cached snapshot the model may reply "Cannot generate SQL" — in that case `rdq ask` surfaces the model's reason and exits 1 instead of running an empty statement.
+
+The exit-code table above (`exec` subcommand) applies to `ask` as well:
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Success (or `--dry-run` print) |
+| `1` | Bedrock / execution error, or the model could not generate runnable SQL |
+| `2` | Usage error (empty prompt, no Bedrock model configured) |
+| `3` | Read-only mode blocked a write statement |
+| `4` | Destructive statement not confirmed |
+| `5` | Timed out (Bedrock 90s, Data API 2m) |
 
 ### TUI keybindings
 
@@ -417,7 +450,7 @@ Drop the `RdqBedrock*` statements when you do not use AI features, and drop `Rdq
 | `rdq tui` | ✅ Implemented |
 | `rdq gui` | ✅ Implemented (separate React SPA, browser-based) |
 | `rdq exec <sql>` (one-shot CLI) | ✅ Implemented |
-| `rdq ask <prompt>` (one-shot CLI) | 🚧 Stub |
+| `rdq ask <prompt>` (one-shot CLI) | ✅ Implemented |
 | Vim mode editor | 🚧 Planned |
 | Visual selection / `dd` / `p` | 🚧 Planned |
 

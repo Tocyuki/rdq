@@ -83,7 +83,7 @@ func runExec(c *ExecCmd, globals *Globals, stdin io.Reader, stdout, stderr io.Wr
 		return exitUsage
 	}
 
-	readOnly := c.isReadOnlyProfile(globals.Profile)
+	readOnly := isReadOnlyProfile(c.loadState, globals.Profile)
 	if readOnly && !runner.IsReadOnlySQL(sql) {
 		fmt.Fprintln(stderr, "rdq exec: "+runner.ErrWriteBlocked.Error())
 		fmt.Fprintln(stderr, "rdq exec: disable read-only mode in the TUI (F8) or GUI settings, then retry.")
@@ -207,13 +207,14 @@ func (c *ExecCmd) resolveSQLInput(stdin io.Reader) (string, error) {
 // isReadOnlyProfile resolves the per-profile read-only policy from
 // state.json. A nil IsReadOnly (never toggled) defaults to TRUE to match
 // the TUI/GUI policy — fresh installs are always safe until the user
-// explicitly opts into writes.
-func (c *ExecCmd) isReadOnlyProfile(profile string) bool {
-	st, err := c.loadState()
+// explicitly opts into writes. Exported to command/ scope so both
+// exec and ask share the same gate.
+func isReadOnlyProfile(load func() (*state.State, error), profile string) bool {
+	st, err := load()
 	if err != nil {
 		// Fail closed — losing state.json should not open destructive
 		// writes that the user had gated behind it.
-		log.Printf("rdq exec: state.Load failed, defaulting to read-only: %v", err)
+		log.Printf("rdq: state.Load failed, defaulting to read-only: %v", err)
 		return true
 	}
 	ps := st.Get(profile)
