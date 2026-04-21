@@ -42,13 +42,19 @@ jobs:
         run: |
           echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
 
+      # Re-checkout with actions/checkout@v5 (not a manual git checkout) so
+      # that (1) the dirty CHANGELOG.md tagpr leaves in the workspace is
+      # wiped, and (2) credentials are persisted for the later `git push`
+      # that commits the frontend bundle back into the release branch.
+      # The initial checkout above uses persist-credentials: false, which
+      # is safe for the tagpr action (it uses GITHUB_TOKEN directly via
+      # the API) but would break the bundle push here.
       - name: Checkout tagpr release PR branch
         if: steps.extract-pr.outputs.head_ref != ''
-        env:
-          HEAD_REF: ${{ steps.extract-pr.outputs.head_ref }}
-        run: |
-          git fetch origin "$HEAD_REF"
-          git checkout "$HEAD_REF"
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.extract-pr.outputs.head_ref }}
+          fetch-depth: 0
 
       - name: Set up Node (for release PR bundle)
         if: steps.extract-pr.outputs.head_ref != ''
