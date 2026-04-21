@@ -26,7 +26,7 @@ func TestVerifyFrontendEmbed_Missing(t *testing.T) {
 	msg := err.Error()
 	for _, want := range []string{
 		"embedded frontend is missing",
-		"go install",
+		"cmd/rdq@latest",
 		"make build",
 		"releases",
 	} {

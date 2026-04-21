@@ -149,10 +149,13 @@ func allowedOrigins(port int, dev bool) []string {
 }
 
 // verifyFrontendEmbed reports a helpful error when the embedded SPA is
-// missing. `go install github.com/Tocyuki/rdq/cmd/rdq@latest` does not run
-// `npm run build`, so the module cache only contains the tracked
-// internal/server/dist/.gitkeep placeholder. Without this check the server
-// would start happily and serve a directory listing showing just
+// missing. Tagged releases carry the compiled frontend bundle in their
+// tag commit (see .github/workflows/tagpr.yml), so `go install @latest`
+// ships a working `rdq gui`. Non-release builds — `go install @main`,
+// `go install ...@<sha>`, or a local `go build` without
+// `make frontend-build` — only have the tracked
+// internal/server/dist/.gitkeep placeholder, and without this check the
+// server would start happily and serve a directory listing showing just
 // ".gitkeep", which looks broken rather than self-explanatory.
 func verifyFrontendEmbed(distFS fs.FS) error {
 	if _, err := fs.Stat(distFS, "index.html"); err == nil {
@@ -160,8 +163,9 @@ func verifyFrontendEmbed(distFS fs.FS) error {
 	}
 	return errors.New(
 		"rdq gui: the embedded frontend is missing.\n" +
-			"This usually means the binary was built with `go install`, which does not run `npm run build`.\n" +
-			"Fix it by installing rdq in one of the following ways instead:\n" +
+			"This binary was built from a non-release commit that does not carry the frontend bundle.\n" +
+			"Fix it by installing rdq in one of these ways:\n" +
+			"  - go install github.com/Tocyuki/rdq/cmd/rdq@latest\n" +
 			"  - download a release tarball from https://github.com/Tocyuki/rdq/releases\n" +
 			"  - clone the repo and run `make build` (requires Node.js and npm)\n" +
 			"The `rdq` (TUI) and `rdq exec` / `rdq tui` subcommands work without the frontend; only `rdq gui` needs it.")
