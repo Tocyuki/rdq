@@ -17,7 +17,7 @@
 - Get automatic, in-context error explanations whenever a query fails
 - Switch between AWS profiles, clusters, secrets, Bedrock models, and response languages without leaving the TUI
 
-The `gui` subcommand exposes a browser-based SQL client (React + Vite SPA embedded in the binary) that delivers the same core experience: SQL execution, result viewing, CSV / JSON export, schema browsing, history, and Bedrock-assisted Ask / Review / Analyze / Explain flows. `exec` and `ask` are placeholder stubs and will be wired to the same engines as the TUI in a future release.
+The `gui` subcommand exposes a browser-based SQL client (React + Vite SPA embedded in the binary) that delivers the same core experience: SQL execution, result viewing, CSV / JSON export, schema browsing, history, and Bedrock-assisted Ask / Review / Analyze / Explain flows. The `exec` subcommand runs a single statement one-shot for scripts and CI pipelines, sharing the same safety guards as the TUI / GUI. `ask` remains a placeholder stub pending a future release.
 
 ## Features
 
@@ -87,17 +87,30 @@ Launch with `rdq gui` (opens `http://127.0.0.1:8080` in your browser automatical
 
 ## Installation
 
+### `go install` (recommended)
+
 ```bash
 go install github.com/Tocyuki/rdq/cmd/rdq@latest
 ```
 
-Or build from source:
+Tagged releases include the compiled frontend bundle, so `rdq` (TUI), `rdq exec`, and `rdq gui` all work out of the box. Pinning a non-release revision (`@main`, `@<commit-sha>`) still installs a usable TUI / `exec` binary, but `rdq gui` will exit with an explanatory error because the frontend bundle is only committed to release tag commits.
+
+### Prebuilt release binaries
+
+Download the tarball for your OS / arch from the [GitHub Releases page](https://github.com/Tocyuki/rdq/releases) and extract the `rdq` binary onto your `$PATH`.
+
+### Build from source
+
+Requires Go 1.25+ and Node.js 20+ (for the frontend build).
 
 ```bash
 git clone https://github.com/Tocyuki/rdq.git
 cd rdq
-go build -o rdq ./cmd/rdq/
+make build           # builds the frontend, copies it into internal/server/dist/, then builds rdq
+./rdq --help
 ```
+
+`make build` is the one source-build path that produces a fully working `rdq gui`. `make go-build` is a faster Go-only rebuild that reuses whatever assets `internal/server/dist/` currently contains.
 
 ## Usage
 
@@ -129,6 +142,35 @@ Only applies to `rdq gui`. The TUI uses neither flag.
 | --- | --- | --- | --- |
 | `--port` | `-P` | `8080` | Port the embedded HTTP server listens on. |
 | `--no-open` | | `false` | Skip opening the browser automatically on launch. |
+
+### exec subcommand
+
+One-shot SQL execution for scripts, CI pipelines, and ad-hoc queries. Shares the same read-only gate, destructive-statement confirmation, and per-profile history with the TUI and GUI (see [Safety features](#safety-features-tui--gui)).
+
+```bash
+rdq exec "SELECT COUNT(*) FROM users"
+rdq exec --file query.sql --output json
+cat migration.sql | rdq exec --file -
+rdq exec "DELETE FROM sessions WHERE expires_at < NOW()" --yes
+```
+
+| Flag | Short | Default | Description |
+| --- | --- | --- | --- |
+| `<sql>` (positional) | | | SQL statement. Mutually exclusive with `--file`. |
+| `--file` | `-f` | | Read SQL from a file. Pass `-` to read from stdin. |
+| `--output` | `-o` | `table` | Output format: `table` (psql-style), `json`, or `csv`. |
+| `--yes` | `-y` | `false` | Skip confirmation for `DELETE` / `UPDATE` without `WHERE` and `TRUNCATE`. Required in non-interactive shells. |
+
+For writes, `(N rows affected)` is printed to **stderr** so `stdout` stays clean for piping (`rdq exec ... > out.json`).
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | AWS / execution error |
+| `2` | Usage error (empty SQL, `--file` + positional, unreadable file) |
+| `3` | Read-only mode blocked a write statement |
+| `4` | Destructive statement not confirmed (`--yes` missing in non-TTY, or interactive rejection) |
+| `5` | Timed out after two minutes |
 
 ### TUI keybindings
 
@@ -264,12 +306,94 @@ Inside the TUI, `^P` opens the profile picker again at any time. Switching to a 
 ## Prerequisites
 
 - AWS credentials configured (`~/.aws/credentials`, SSO, env vars, ...)
-- IAM permissions:
-  - **RDS** — `rds:DescribeDBClusters`
-  - **Secrets Manager** — `secretsmanager:GetSecretValue`, `secretsmanager:ListSecrets`, `secretsmanager:DescribeSecret`
-  - **RDS Data API** — `rds-data:ExecuteStatement`
-  - **Bedrock** (optional, only for AI features) — `bedrock:Converse`, `bedrock:ListInferenceProfiles`, `bedrock:ListFoundationModels`
 - An Aurora cluster with the [Data API enabled](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/data-api.html)
+- IAM permissions — see the table and policy example below
+
+### Required IAM actions
+
+| IAM Action | Service | When `rdq` calls it | Resource scope |
+| --- | --- | --- | --- |
+| `rds:DescribeDBClusters` | RDS | Cluster picker; `^T` in TUI | `*` (enumeration) |
+| `secretsmanager:ListSecrets` | Secrets Manager | Secret picker | `*` (enumeration) |
+| `secretsmanager:DescribeSecret` | Secrets Manager | Resolving `MasterUserSecret` display name | Secret ARN |
+| `secretsmanager:GetSecretValue` | Secrets Manager | Required by the Data API backend on every `ExecuteStatement` | Secret ARN |
+| `rds-data:ExecuteStatement` | RDS Data API | SQL execution (TUI / GUI / `exec`) + `information_schema` fetch | Cluster ARN |
+| `bedrock:ListInferenceProfiles` | Bedrock | First model-list load (AI features only) | `*` |
+| `bedrock:ListFoundationModels` | Bedrock | Fallback model list (AI features only) | `*` |
+| `bedrock:InvokeModel` | Bedrock Runtime | Ask / Review / Explain / Analyze via the Converse API | Inference profile ARN + foundation model ARN(s) |
+| `sts:GetCallerIdentity` | STS | Only when `--debug` / `-d` is passed | `*` |
+
+- **Bedrock** actions are only needed for AI features (`^G`, `F6`). Skip them if you never invoke those flows.
+- `sts:GetCallerIdentity` is only consulted with `--debug`; omit it for hands-off deployments.
+- `secretsmanager:GetSecretValue` is not called by `rdq` directly — the RDS Data API service internally fetches credentials with it whenever `ExecuteStatement` runs, so the caller principal still needs the permission.
+
+### Minimum IAM policy example
+
+Replace `${cluster_arn}`, `${secret_arn}`, and `${bedrock_model_arn}` with your own ARNs. For cross-region Bedrock inference profiles, grant `bedrock:InvokeModel` on both the profile ARN and the foundation model ARN in every destination region the profile routes to.
+
+<details>
+<summary>Click to expand the policy JSON</summary>
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RdqEnumeration",
+      "Effect": "Allow",
+      "Action": [
+        "rds:DescribeDBClusters",
+        "secretsmanager:ListSecrets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RdqSecretAccess",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "${secret_arn}"
+    },
+    {
+      "Sid": "RdqDataAPI",
+      "Effect": "Allow",
+      "Action": "rds-data:ExecuteStatement",
+      "Resource": "${cluster_arn}"
+    },
+    {
+      "Sid": "RdqBedrockOptional",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ListInferenceProfiles",
+        "bedrock:ListFoundationModels"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RdqBedrockInvokeOptional",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": [
+        "${bedrock_model_arn}",
+        "arn:aws:bedrock:us-east-1::foundation-model/*",
+        "arn:aws:bedrock:us-west-2::foundation-model/*"
+      ]
+    },
+    {
+      "Sid": "RdqDebugOptional",
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+</details>
+
+Drop the `RdqBedrock*` statements when you do not use AI features, and drop `RdqDebugOptional` when you do not run with `--debug`.
 
 ## Tech stack
 
@@ -292,7 +416,7 @@ Inside the TUI, `^P` opens the profile picker again at any time. Switching to a 
 | `rdq` (TUI default) | ✅ Implemented |
 | `rdq tui` | ✅ Implemented |
 | `rdq gui` | ✅ Implemented (separate React SPA, browser-based) |
-| `rdq exec <sql>` (one-shot CLI) | 🚧 Stub |
+| `rdq exec <sql>` (one-shot CLI) | ✅ Implemented |
 | `rdq ask <prompt>` (one-shot CLI) | 🚧 Stub |
 | Vim mode editor | 🚧 Planned |
 | Visual selection / `dd` / `p` | 🚧 Planned |

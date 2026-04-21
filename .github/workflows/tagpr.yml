@@ -29,6 +29,52 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # When tagpr has an open release PR (but no new tag yet), push the
+      # freshly built frontend bundle into that PR so the eventual tag
+      # commit embeds it. This is what lets `go install @latest` launch
+      # `rdq gui` without the SPA assets going missing. The cleanup
+      # workflow (post-release.yml) then removes the bundle from main
+      # HEAD so the repo stays clean between releases.
+      - id: extract-pr
+        if: steps.tagpr.outputs.pull_request != ''
+        run: |
+          echo "head_ref=$(echo '${{ steps.tagpr.outputs.pull_request }}' | jq -r '.head.ref')" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tagpr release PR branch
+        if: steps.extract-pr.outputs.head_ref != ''
+        run: |
+          git fetch origin "${{ steps.extract-pr.outputs.head_ref }}"
+          git checkout "${{ steps.extract-pr.outputs.head_ref }}"
+
+      - name: Set up Node (for release PR bundle)
+        if: steps.extract-pr.outputs.head_ref != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies (for release PR bundle)
+        if: steps.extract-pr.outputs.head_ref != ''
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build and commit frontend bundle into release PR
+        if: steps.extract-pr.outputs.head_ref != ''
+        env:
+          PR_BRANCH: ${{ steps.extract-pr.outputs.head_ref }}
+        run: |
+          make frontend-build
+          git add -f internal/server/dist/
+          if git diff --cached --quiet; then
+            echo "frontend bundle unchanged, nothing to commit"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "chore(release): embed frontend bundle for go install"
+          git push origin "HEAD:$PR_BRANCH"
+
       - name: Set up Go
         if: steps.tagpr.outputs.tag != ''
         uses: actions/setup-go@v6

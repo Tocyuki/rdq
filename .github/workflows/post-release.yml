@@ -1,0 +1,45 @@
+name: post-release cleanup
+
+# tagpr.yml embeds the built frontend bundle into the release PR so the
+# tag commit carries it (which is what makes `go install @latest` serve a
+# working `rdq gui`). Once the tag is pushed we strip the bundle back out
+# of main so the repo's HEAD stays clean — only the immutable tag commit
+# retains the embedded assets.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: post-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  drop-bundle:
+    name: drop embedded frontend bundle from main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Remove bundle files (preserve .gitkeep)
+        run: |
+          find internal/server/dist -mindepth 1 ! -name '.gitkeep' -print -delete || true
+
+      - name: Commit and push if anything changed
+        run: |
+          if git diff --quiet; then
+            echo "no bundle files to remove"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -am "chore: drop embedded frontend bundle after ${GITHUB_REF_NAME} release"
+          git push origin HEAD:main
