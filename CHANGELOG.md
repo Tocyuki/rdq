@@ -1,5 +1,8 @@
 # Changelog
 
+## [v0.0.4](https://github.com/Tocyuki/rdq/compare/v0.0.3...v0.0.4) - 2026-04-21
+- ci(tagpr): skip bundle push when tagpr is cutting a tag by @Tocyuki in https://github.com/Tocyuki/rdq/pull/14
+
 ## [v0.0.3](https://github.com/Tocyuki/rdq/compare/v0.0.2...v0.0.3) - 2026-04-21
 - feat: rdq exec CLI, IAM docs, frontend embed guard, and go install @latest GUI support by @Tocyuki in https://github.com/Tocyuki/rdq/pull/9
 - ci(tagpr): fix shell injection on PR body with apostrophe by @Tocyuki in https://github.com/Tocyuki/rdq/pull/11
