@@ -52,6 +52,9 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("mount embedded dist: %w", err)
 	}
+	if err := verifyFrontendEmbed(distFS); err != nil {
+		return err
+	}
 
 	seed := SessionDTO{
 		Profile:         opts.InitialProfile,
@@ -143,6 +146,25 @@ func allowedOrigins(port int, dev bool) []string {
 		)
 	}
 	return out
+}
+
+// verifyFrontendEmbed reports a helpful error when the embedded SPA is
+// missing. `go install github.com/Tocyuki/rdq/cmd/rdq@latest` does not run
+// `npm run build`, so the module cache only contains the tracked
+// internal/server/dist/.gitkeep placeholder. Without this check the server
+// would start happily and serve a directory listing showing just
+// ".gitkeep", which looks broken rather than self-explanatory.
+func verifyFrontendEmbed(distFS fs.FS) error {
+	if _, err := fs.Stat(distFS, "index.html"); err == nil {
+		return nil
+	}
+	return errors.New(
+		"rdq gui: the embedded frontend is missing.\n" +
+			"This usually means the binary was built with `go install`, which does not run `npm run build`.\n" +
+			"Fix it by installing rdq in one of the following ways instead:\n" +
+			"  - download a release tarball from https://github.com/Tocyuki/rdq/releases\n" +
+			"  - clone the repo and run `make build` (requires Node.js and npm)\n" +
+			"The `rdq` (TUI) and `rdq exec` / `rdq tui` subcommands work without the frontend; only `rdq gui` needs it.")
 }
 
 // openBrowser tries to launch the user's default browser pointed at url. It
