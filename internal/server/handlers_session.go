@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/Tocyuki/rdq/internal/awsauth"
@@ -48,9 +47,7 @@ func (h *sessionHandlers) getSession(w http.ResponseWriter, _ *http.Request) {
 // switch picks up the new profile's stored production flag automatically).
 func (h *sessionHandlers) putSession(w http.ResponseWriter, r *http.Request) {
 	var dto SessionDTO
-	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
-		writeJSONError(w, http.StatusBadRequest, errCodeBadRequest,
-			"invalid JSON body: "+err.Error())
+	if !decodeJSONBody(w, r, &dto, maxSessionBodyBytes) {
 		return
 	}
 	h.session.Set(dto)

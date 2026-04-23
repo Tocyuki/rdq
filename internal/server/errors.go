@@ -8,14 +8,15 @@ import (
 // Error codes are a small, stable enum used across endpoints so the SPA can
 // branch on them without parsing free-form messages.
 const (
-	errCodeBadRequest   = "bad_request"
-	errCodeNotFound     = "not_found"
-	errCodeOriginDenied = "origin_denied"
-	errCodeUnauthorized = "unauthorized"
-	errCodeTimeout      = "timeout"
-	errCodeAWSError     = "aws_error"
-	errCodeInternal     = "internal"
-	errCodeReadOnly     = "read_only"
+	errCodeBadRequest      = "bad_request"
+	errCodeNotFound        = "not_found"
+	errCodeOriginDenied    = "origin_denied"
+	errCodeRequestTooLarge = "request_too_large"
+	errCodeUnauthorized    = "unauthorized"
+	errCodeTimeout         = "timeout"
+	errCodeAWSError        = "aws_error"
+	errCodeInternal        = "internal"
+	errCodeReadOnly        = "read_only"
 )
 
 // writeJSONError serializes an ErrorDTO with the given status, code, and

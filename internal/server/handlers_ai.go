@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -77,9 +76,7 @@ func (h *aiHandlers) models(w http.ResponseWriter, r *http.Request) {
 // ask serves POST /api/ai/ask — natural-language → SQL.
 func (h *aiHandlers) ask(w http.ResponseWriter, r *http.Request) {
 	var req AskRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, errCodeBadRequest,
-			"invalid JSON body: "+err.Error())
+	if !decodeJSONBody(w, r, &req, maxAIBodyBytes) {
 		return
 	}
 	if err := validateAIBase(req.aiRequestBase); err != nil {
@@ -114,9 +111,7 @@ func (h *aiHandlers) ask(w http.ResponseWriter, r *http.Request) {
 // explain serves POST /api/ai/explain — analyze a SQL error.
 func (h *aiHandlers) explain(w http.ResponseWriter, r *http.Request) {
 	var req ExplainRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, errCodeBadRequest,
-			"invalid JSON body: "+err.Error())
+	if !decodeJSONBody(w, r, &req, maxAIBodyBytes) {
 		return
 	}
 	if err := validateAIBase(req.aiRequestBase); err != nil {
@@ -145,9 +140,7 @@ func (h *aiHandlers) explain(w http.ResponseWriter, r *http.Request) {
 // review serves POST /api/ai/review — critique the current SQL.
 func (h *aiHandlers) review(w http.ResponseWriter, r *http.Request) {
 	var req ReviewRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, errCodeBadRequest,
-			"invalid JSON body: "+err.Error())
+	if !decodeJSONBody(w, r, &req, maxAIBodyBytes) {
 		return
 	}
 	if err := validateAIBase(req.aiRequestBase); err != nil {
@@ -180,9 +173,7 @@ func (h *aiHandlers) review(w http.ResponseWriter, r *http.Request) {
 // analyze serves POST /api/ai/analyze — interpret a query's result blob.
 func (h *aiHandlers) analyze(w http.ResponseWriter, r *http.Request) {
 	var req AnalyzeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, errCodeBadRequest,
-			"invalid JSON body: "+err.Error())
+	if !decodeJSONBody(w, r, &req, maxAnalyzeBodyBytes) {
 		return
 	}
 	if err := validateAIBase(req.aiRequestBase); err != nil {

@@ -111,6 +111,7 @@ func serve(ctx context.Context, opts Options, handler http.Handler, apiToken str
 		ReadTimeout:       5 * time.Minute,
 		WriteTimeout:      10 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    16 << 10,
 	}
 
 	if !opts.NoOpen {
