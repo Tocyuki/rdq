@@ -27,6 +27,44 @@ func TestCheckOriginAllowsKnownOrigin(t *testing.T) {
 	}
 }
 
+func TestRequireAPITokenAllowsKnownToken(t *testing.T) {
+	mw := requireAPIToken("test-token")
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	req.Header.Set(apiTokenHeader, "test-token")
+	rr := httptest.NewRecorder()
+	mw(okHandler()).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRequireAPITokenRejectsMissingToken(t *testing.T) {
+	mw := requireAPIToken("test-token")
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	rr := httptest.NewRecorder()
+	mw(okHandler()).ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var body ErrorDTO
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid error body: %v", err)
+	}
+	if body.Error.Code != errCodeUnauthorized {
+		t.Errorf("expected code %s, got %s", errCodeUnauthorized, body.Error.Code)
+	}
+}
+
+func TestRequireAPITokenSkipsNonAPIRoutes(t *testing.T) {
+	mw := requireAPIToken("test-token")
+	req := httptest.NewRequest(http.MethodGet, "/query", nil)
+	rr := httptest.NewRecorder()
+	mw(okHandler()).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected non-API request to pass through, got %d", rr.Code)
+	}
+}
+
 func TestCheckOriginRejectsUnknownOrigin(t *testing.T) {
 	mw := checkOrigin([]string{"http://127.0.0.1:8080"})
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)

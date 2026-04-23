@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react'
 
 import { ConnectionDialog } from '@/features/connection/ConnectionDialog'
 import { sessionIsComplete, useSession } from '@/hooks/useSession'
+import { ApiError } from '@/lib/api/client'
+import { ErrorCode } from '@/lib/api/error-codes'
 import { useUIStore } from '@/stores/uiStore'
 
 /**
@@ -33,6 +35,25 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
       setOpen(true)
     }
   }, [session.isSuccess, session.data, setOpen])
+
+  if (session.isError) {
+    const isUnauthorized =
+      session.error instanceof ApiError && session.error.code === ErrorCode.Unauthorized
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-6">
+        <div className="max-w-md rounded-lg border border-border bg-card p-6 text-sm shadow-sm">
+          <h1 className="text-base font-semibold tracking-tight">
+            {isUnauthorized ? 'GUI session expired' : 'Could not load GUI session'}
+          </h1>
+          <p className="mt-2 text-muted-foreground">
+            {isUnauthorized
+              ? 'This tab no longer has a valid per-run GUI token. Re-run `rdq gui` and use the newly opened window.'
+              : session.error.message}
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <>

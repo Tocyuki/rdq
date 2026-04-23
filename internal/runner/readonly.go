@@ -21,13 +21,8 @@ var ErrWriteBlocked = errors.New("read-only mode blocks non-SELECT statements")
 //     Data API ignores it (ResourceArn drives the connection), so there is
 //     no reason to allow it.
 //   - SET: some variants are side-effecting (SET autocommit, SET ROLE).
-//   - WITH: CTEs that end in DELETE/UPDATE/INSERT are writes on PostgreSQL.
-//     We still allow WITH because the vast majority of analytical CTEs end
-//     in SELECT; a read-only user who tries a data-modifying CTE gets the
-//     AWS error back. Trade-off documented in the Settings page copy.
 var readOnlyPrefixes = map[string]struct{}{
 	"SELECT":   {},
-	"WITH":     {},
 	"SHOW":     {},
 	"EXPLAIN":  {},
 	"DESCRIBE": {},
@@ -45,6 +40,18 @@ func IsReadOnlySQL(sql string) bool {
 	head := firstKeyword(sql)
 	if head == "" {
 		return false
+	}
+	if head == "WITH" {
+		bodies, tail, ok := splitLeadingWith(sql)
+		if !ok || len(bodies) == 0 {
+			return false
+		}
+		for _, body := range bodies {
+			if !IsReadOnlySQL(body) {
+				return false
+			}
+		}
+		return IsReadOnlySQL(tail)
 	}
 	_, ok := readOnlyPrefixes[head]
 	return ok

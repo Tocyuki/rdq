@@ -71,7 +71,7 @@ Flags are stored per profile in `~/.rdq/state.json` and survive restarts.
 
 ### GUI mode (browser-based SQL client)
 
-Launch with `rdq gui` (opens `http://127.0.0.1:8080` in your browser automatically; add `--no-open` to suppress). The GUI shares the same `internal/` engines as the TUI, so results, history, and schema caches are consistent across both surfaces.
+Launch with `rdq gui`. The server binds to `127.0.0.1` and opens a browser window automatically using a per-run GUI session token embedded in the launch URL. Add `--no-open` to suppress the automatic browser launch; in that mode `rdq` prints the full launch URL you should open manually. The GUI shares the same `internal/` engines as the TUI, so results, history, and schema caches are consistent across both surfaces.
 
 - **Connection wizard** — pick profile → cluster → secret → database from browser-side searchable lists; the selection persists to `~/.rdq/state.json` just like the TUI. Each field also has a **one-click switcher** in the connection bar (Profile / Cluster / Database badges) so you can rebind without reopening the full wizard.
 - **CodeMirror 6 SQL editor** — syntax highlighting, schema-aware autocomplete, `Cmd/Ctrl+Enter` to run. If text is selected, only the selection runs.
@@ -94,6 +94,32 @@ go install github.com/Tocyuki/rdq/cmd/rdq@latest
 ```
 
 Tagged releases include the compiled frontend bundle, so `rdq` (TUI), `rdq exec`, and `rdq gui` all work out of the box. Pinning a non-release revision (`@main`, `@<commit-sha>`) still installs a usable TUI / `exec` binary, but `rdq gui` will exit with an explanatory error because the frontend bundle is only committed to release tag commits.
+
+#### Troubleshooting: `sum.golang.org` verification failure
+
+If `go install` fails with a message like:
+
+```
+verifying module: ... reading https://sum.golang.org/lookup/...: 404 Not Found
+server response: not found: ...: Failed to connect to github.com port 443: Connection refused
+```
+
+the module itself is fine — `sum.golang.org` just failed to reach GitHub when it tried to compute the checksum for a freshly tagged version. It usually clears on its own within a few hours.
+
+Workarounds, in order of preference:
+
+1. **Retry after a few minutes / hours.** Most of the time the checksum database catches up without any action from you.
+2. **Bypass the checksum database for this install only:**
+   ```bash
+   GOSUMDB=off go install github.com/Tocyuki/rdq/cmd/rdq@latest
+   ```
+3. **Skip the module proxy entirely and pull from GitHub directly:**
+   ```bash
+   GOPROXY=direct GOSUMDB=off go install github.com/Tocyuki/rdq/cmd/rdq@latest
+   ```
+4. If none of the above work, grab a [prebuilt release binary](#prebuilt-release-binaries).
+
+> Do **not** set `GOSUMDB=off` permanently in your shell profile — it disables supply-chain integrity checks for every Go module you install, not just `rdq`. Scope it to the single command instead.
 
 ### Prebuilt release binaries
 
@@ -141,7 +167,7 @@ Only applies to `rdq gui`. The TUI uses neither flag.
 | Flag | Short | Default | Description |
 | --- | --- | --- | --- |
 | `--port` | `-P` | `8080` | Port the embedded HTTP server listens on. |
-| `--no-open` | | `false` | Skip opening the browser automatically on launch. |
+| `--no-open` | | `false` | Skip opening the browser automatically on launch; `rdq` prints the full tokenized launch URL instead. |
 
 ### exec subcommand
 

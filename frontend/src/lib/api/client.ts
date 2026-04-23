@@ -1,4 +1,5 @@
 import type { ApiErrorPayload } from './types'
+import { getAPIToken } from './session-token'
 
 /**
  * ApiError preserves both the HTTP status and the server's structured
@@ -29,9 +30,13 @@ interface RequestOptions {
 }
 
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const token = getAPIToken()
   const res = await fetch(path, {
     method: opts.method ?? 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'X-RDQ-Token': token } : {}),
+    },
     body: opts.body != null ? JSON.stringify(opts.body) : undefined,
     credentials: 'same-origin',
     signal: opts.signal,

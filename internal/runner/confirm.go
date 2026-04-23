@@ -24,6 +24,20 @@ import (
 func NeedsConfirmation(sql string) (bool, string) {
 	head := firstKeyword(sql)
 	switch head {
+	case "WITH":
+		bodies, tail, ok := splitLeadingWith(sql)
+		if !ok || len(bodies) == 0 {
+			return true, "WITH statements can hide destructive writes; review this query before running it."
+		}
+		for _, body := range bodies {
+			if need, reason := NeedsConfirmation(body); need {
+				return true, reason
+			}
+		}
+		if strings.TrimSpace(tail) == "" {
+			return true, "WITH statements can hide destructive writes; review this query before running it."
+		}
+		return NeedsConfirmation(tail)
 	case "TRUNCATE":
 		return true, "TRUNCATE removes every row from the table — this is not reversible."
 	case "DELETE":

@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -81,14 +83,15 @@ func Run(ctx context.Context, opts Options) error {
 		history:        hist,
 		distFS:         distFS,
 		allowedOrigins: allowedOrigins(opts.Port, opts.Dev),
+		apiToken:       newAPIToken(),
 	}
 
-	return serve(ctx, opts, buildRouter(deps))
+	return serve(ctx, opts, buildRouter(deps), deps.apiToken)
 }
 
 // serve binds a 127.0.0.1 listener, launches a browser if requested, and
 // blocks on the http.Server until ctx is done.
-func serve(ctx context.Context, opts Options, handler http.Handler) error {
+func serve(ctx context.Context, opts Options, handler http.Handler, apiToken string) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", opts.Port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -99,6 +102,7 @@ func serve(ctx context.Context, opts Options, handler http.Handler) error {
 	// launches use the real port.
 	actual := ln.Addr().(*net.TCPAddr)
 	url := fmt.Sprintf("http://127.0.0.1:%d", actual.Port)
+	launchURL := guiLaunchURL(url, apiToken)
 	log.Printf("rdq gui: listening on %s", url)
 
 	srv := &http.Server{
@@ -107,10 +111,13 @@ func serve(ctx context.Context, opts Options, handler http.Handler) error {
 		ReadTimeout:       5 * time.Minute,
 		WriteTimeout:      10 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    16 << 10,
 	}
 
 	if !opts.NoOpen {
-		go openBrowser(url)
+		go openBrowser(launchURL)
+	} else {
+		log.Printf("rdq gui: open this URL in your browser: %s", launchURL)
 	}
 
 	errCh := make(chan error, 1)
@@ -187,4 +194,18 @@ func openBrowser(url string) {
 	if cmd != nil {
 		_ = cmd.Run()
 	}
+}
+
+const launchTokenParam = "rdq-token"
+
+func newAPIToken() string {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Errorf("generate GUI API token: %w", err))
+	}
+	return base64.RawURLEncoding.EncodeToString(buf)
+}
+
+func guiLaunchURL(baseURL, token string) string {
+	return fmt.Sprintf("%s/#%s=%s", baseURL, launchTokenParam, token)
 }

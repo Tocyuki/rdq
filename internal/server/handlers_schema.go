@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
 	"time"
@@ -76,9 +75,7 @@ func (h *schemaHandlers) get(w http.ResponseWriter, r *http.Request) {
 // cache exists, and overwrites the cache on success.
 func (h *schemaHandlers) refresh(w http.ResponseWriter, r *http.Request) {
 	var req SchemaRefreshRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, errCodeBadRequest,
-			"invalid JSON body: "+err.Error())
+	if !decodeJSONBody(w, r, &req, maxSchemaRefreshBodyBytes) {
 		return
 	}
 	if req.Profile == "" || req.Cluster == "" || req.Secret == "" || req.Database == "" {

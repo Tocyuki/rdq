@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -64,9 +63,7 @@ func (h *historyHandlers) favorite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req FavoriteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, errCodeBadRequest,
-			"invalid JSON body: "+err.Error())
+	if !decodeJSONBody(w, r, &req, maxFavoriteBodyBytes) {
 		return
 	}
 	at, err := time.Parse(time.RFC3339Nano, req.At)

@@ -25,8 +25,10 @@ func TestNeedsConfirmation(t *testing.T) {
 		{"delete where in string only", "DELETE FROM t -- WHERE lives in comment", true, "DELETE without a WHERE"},
 		{"delete block comment contains where", "DELETE FROM t /* WHERE */ ", true, "DELETE without a WHERE"},
 		{"delete string contains where but outside where", "DELETE FROM t WHERE note = 'WHERE is inside a string'", false, ""},
-		{"delete cte without where in main", "WITH c AS (SELECT 1) DELETE FROM t", false, ""},
-		// ^ head keyword is WITH, not DELETE, so it's outside the DELETE/UPDATE branch.
+		{"delete cte without where in main", "WITH c AS (SELECT 1) DELETE FROM t", true, "DELETE without a WHERE"},
+		{"delete cte in body without where", "WITH gone AS (DELETE FROM t RETURNING id) SELECT * FROM gone", true, "DELETE without a WHERE"},
+		{"update cte in body without where", "WITH changed AS (UPDATE t SET x = 1 RETURNING id) SELECT * FROM changed", true, "UPDATE without a WHERE"},
+		{"malformed with is conservative", "WITH c AS SELECT 1", true, "WITH statements can hide destructive writes"},
 
 		// UPDATE
 		{"update no where", "UPDATE t SET x = 1", true, "UPDATE without a WHERE"},

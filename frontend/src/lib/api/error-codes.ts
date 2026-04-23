@@ -7,6 +7,7 @@ export const ErrorCode = {
   BadRequest: 'bad_request',
   NotFound: 'not_found',
   OriginDenied: 'origin_denied',
+  Unauthorized: 'unauthorized',
   Timeout: 'timeout',
   AWSError: 'aws_error',
   Internal: 'internal',

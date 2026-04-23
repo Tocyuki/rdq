@@ -25,15 +25,22 @@ func newTestRouter() http.Handler {
 		awsCache:       newAWSCache(),
 		distFS:         routerTestFS(),
 		allowedOrigins: []string{"http://127.0.0.1:8080"},
+		apiToken:       "test-token",
 	})
+}
+
+func newAPIRequest(method, url string, body io.Reader) *http.Request {
+	req, _ := http.NewRequest(method, url, body)
+	req.Header.Set("Origin", "http://127.0.0.1:8080")
+	req.Header.Set(apiTokenHeader, "test-token")
+	return req
 }
 
 func TestRouterAPIHealth(t *testing.T) {
 	ts := httptest.NewServer(newTestRouter())
 	defer ts.Close()
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/health", nil)
-	req.Header.Set("Origin", "http://127.0.0.1:8080")
+	req := newAPIRequest(http.MethodGet, ts.URL+"/api/health", nil)
 	// NewRequest sets Host to the server URL which is not localhost:8080;
 	// the allow list contains 127.0.0.1:8080 explicitly via Origin, so the
 	// middleware accepts on the Origin match.
@@ -52,8 +59,7 @@ func TestRouterSessionRoundTrip(t *testing.T) {
 	ts := httptest.NewServer(newTestRouter())
 	defer ts.Close()
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/session", nil)
-	req.Header.Set("Origin", "http://127.0.0.1:8080")
+	req := newAPIRequest(http.MethodGet, ts.URL+"/api/session", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -101,8 +107,7 @@ func TestRouterUnknownAPIReturns404JSON(t *testing.T) {
 	ts := httptest.NewServer(newTestRouter())
 	defer ts.Close()
 
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/does-not-exist", nil)
-	req.Header.Set("Origin", "http://127.0.0.1:8080")
+	req := newAPIRequest(http.MethodGet, ts.URL+"/api/does-not-exist", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"log"
 	"net"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"time"
 )
+
+const apiTokenHeader = "X-RDQ-Token"
 
 // checkOrigin returns a middleware that rejects /api/* requests whose Origin
 // header is not in allowedOrigins. Requests without an Origin header are
@@ -42,6 +45,28 @@ func checkOrigin(allowedOrigins []string) func(http.Handler) http.Handler {
 			if _, ok := allowed[origin]; !ok {
 				writeJSONError(w, http.StatusForbidden, errCodeOriginDenied,
 					fmt.Sprintf("origin %q is not allowed", origin))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// requireAPIToken rejects /api/* requests that do not present the current GUI
+// session token. The token is delivered only through the launch URL fragment
+// that rdq opens in the browser, so another local process cannot use the
+// loopback API just by knowing the port.
+func requireAPIToken(token string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasPrefix(r.URL.Path, "/api/") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			got := r.Header.Get(apiTokenHeader)
+			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+				writeJSONError(w, http.StatusUnauthorized, errCodeUnauthorized,
+					"missing or invalid GUI session token; reopen rdq gui and retry")
 				return
 			}
 			next.ServeHTTP(w, r)

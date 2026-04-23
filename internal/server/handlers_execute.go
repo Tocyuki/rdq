@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -58,9 +57,7 @@ func defaultExecuteSQL(ctx context.Context, cfg aws.Config, target runner.Target
 // (profile == "") skip history recording.
 func (h *executeHandlers) execute(w http.ResponseWriter, r *http.Request) {
 	var req ExecuteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, errCodeBadRequest,
-			"invalid JSON body: "+err.Error())
+	if !decodeJSONBody(w, r, &req, maxExecuteBodyBytes) {
 		return
 	}
 	if req.Profile == "" {
