@@ -50,8 +50,9 @@ func buildRouter(deps handlerDeps) http.Handler {
 	// everything the API router did not.
 	mux.Handle("/", spaHandler(deps.distFS))
 
-	// Middleware order: log (outermost) → recover → origin check → mux.
-	return chain(mux, logRequest, recoverPanic, checkOrigin(deps.allowedOrigins))
+	// Middleware order: log (outermost) → recover → origin check → API token
+	// check → mux.
+	return chain(mux, logRequest, recoverPanic, checkOrigin(deps.allowedOrigins), requireAPIToken(deps.apiToken))
 }
 
 // handlerDeps bundles dependencies the router needs to wire up handlers. It
@@ -63,6 +64,7 @@ type handlerDeps struct {
 	history        *history.Store
 	distFS         fs.FS
 	allowedOrigins []string
+	apiToken       string
 }
 
 // spaHandler serves files from distFS, falling back to index.html for any

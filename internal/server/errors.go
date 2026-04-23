@@ -11,6 +11,7 @@ const (
 	errCodeBadRequest   = "bad_request"
 	errCodeNotFound     = "not_found"
 	errCodeOriginDenied = "origin_denied"
+	errCodeUnauthorized = "unauthorized"
 	errCodeTimeout      = "timeout"
 	errCodeAWSError     = "aws_error"
 	errCodeInternal     = "internal"
