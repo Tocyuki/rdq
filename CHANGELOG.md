@@ -1,5 +1,8 @@
 # Changelog
 
+## [v0.0.6](https://github.com/Tocyuki/rdq/compare/v0.0.5...v0.0.6) - 2026-04-23
+- fix(gui): harden localhost API against local-process abuse by @Tocyuki in https://github.com/Tocyuki/rdq/pull/19
+
 ## [v0.0.5](https://github.com/Tocyuki/rdq/compare/v0.0.4...v0.0.5) - 2026-04-21
 - feat(ask): one-shot natural-language SQL subcommand by @Tocyuki in https://github.com/Tocyuki/rdq/pull/16
 - feat(schema): filter system-owned schemas, group GUI sidebar, fix TUI status-bar clipping by @Tocyuki in https://github.com/Tocyuki/rdq/pull/17
