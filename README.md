@@ -95,6 +95,32 @@ go install github.com/Tocyuki/rdq/cmd/rdq@latest
 
 Tagged releases include the compiled frontend bundle, so `rdq` (TUI), `rdq exec`, and `rdq gui` all work out of the box. Pinning a non-release revision (`@main`, `@<commit-sha>`) still installs a usable TUI / `exec` binary, but `rdq gui` will exit with an explanatory error because the frontend bundle is only committed to release tag commits.
 
+#### Troubleshooting: `sum.golang.org` verification failure
+
+If `go install` fails with a message like:
+
+```
+verifying module: ... reading https://sum.golang.org/lookup/...: 404 Not Found
+server response: not found: ...: Failed to connect to github.com port 443: Connection refused
+```
+
+the module itself is fine — `sum.golang.org` just failed to reach GitHub when it tried to compute the checksum for a freshly tagged version. It usually clears on its own within a few hours.
+
+Workarounds, in order of preference:
+
+1. **Retry after a few minutes / hours.** Most of the time the checksum database catches up without any action from you.
+2. **Bypass the checksum database for this install only:**
+   ```bash
+   GOSUMDB=off go install github.com/Tocyuki/rdq/cmd/rdq@latest
+   ```
+3. **Skip the module proxy entirely and pull from GitHub directly:**
+   ```bash
+   GOPROXY=direct GOSUMDB=off go install github.com/Tocyuki/rdq/cmd/rdq@latest
+   ```
+4. If none of the above work, grab a [prebuilt release binary](#prebuilt-release-binaries).
+
+> Do **not** set `GOSUMDB=off` permanently in your shell profile — it disables supply-chain integrity checks for every Go module you install, not just `rdq`. Scope it to the single command instead.
+
 ### Prebuilt release binaries
 
 Download the tarball for your OS / arch from the [GitHub Releases page](https://github.com/Tocyuki/rdq/releases) and extract the `rdq` binary onto your `$PATH`.
