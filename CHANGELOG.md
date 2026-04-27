@@ -1,5 +1,8 @@
 # Changelog
 
+## [v0.0.7](https://github.com/Tocyuki/rdq/compare/v0.0.6...v0.0.7) - 2026-04-27
+- feat(skills): ship rdq-exec Agent Skill via Songmu/skillsmith by @Tocyuki in https://github.com/Tocyuki/rdq/pull/21
+
 ## [v0.0.6](https://github.com/Tocyuki/rdq/compare/v0.0.5...v0.0.6) - 2026-04-23
 - fix(gui): harden localhost API against local-process abuse by @Tocyuki in https://github.com/Tocyuki/rdq/pull/19
 
