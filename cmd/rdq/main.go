@@ -34,6 +34,16 @@ var bareFlags = []bareFlagSpec{
 // knownSubcommands enumerates the top-level subcommand names. preScanBareFlags
 // uses it to detect "rdq --profile exec ..." patterns where the token after a
 // bare flag is a subcommand rather than a value.
+// knownSubcommands enumerates the top-level subcommand names. preScanBareFlags
+// uses it to detect "rdq --profile exec ..." patterns where the token after a
+// bare flag is a subcommand rather than a value.
+//
+// Note: "skills" is intentionally NOT listed here. Adding it would force users
+// with an AWS profile named "skills" to write `--profile=skills` (the bare form
+// `--profile skills` would be misread as the skills subcommand). Since `rdq
+// skills` is dispatched before Kong (see main.go) and never needs an AWS
+// profile, supporting `rdq -p skills install` is unnecessary — users should
+// just write `rdq skills install`.
 var knownSubcommands = map[string]bool{
 	"exec": true,
 	"ask":  true,
@@ -67,9 +77,18 @@ var cli struct {
 func main() {
 	os.Args = preScanBareFlags(os.Args)
 
+	// The skills subcommand is handled before Kong: it does not need AWS
+	// credentials and skillsmith parses its own flags via the stdlib `flag`
+	// package. Routing here mirrors the integration pattern in
+	// skillsmith's README. Run `rdq skills --help` for details.
+	if len(os.Args) >= 2 && os.Args[1] == "skills" {
+		dispatchSkills(os.Args)
+		return
+	}
+
 	ctx := kong.Parse(&cli,
 		kong.Name("rdq"),
-		kong.Description("CLI for querying Aurora via RDS Data API."),
+		kong.Description("CLI for querying Aurora via RDS Data API. See `rdq skills --help` for bundled Agent Skills."),
 		kong.UsageOnError(),
 	)
 
