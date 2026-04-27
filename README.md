@@ -335,6 +335,29 @@ When you start `rdq` without a profile name in play (no `--profile`, no `AWS_PRO
 - Nothing is written to `~/.rdq/state.json` or the SQL history file
 - Switching to a named profile from inside the TUI (`^P`) re-enables persistence
 
+## Agent Skills (`rdq skills`)
+
+`rdq` ships an [Agent Skill](https://agentskills.io/specification) — `rdq-exec` —
+that teaches AI agents (Claude Code, GitHub Copilot, OpenAI Codex, …) how to
+drive `rdq exec` safely: argument grammar, output formats, exit codes, and
+the read-only / destructive-statement guards that the CLI enforces.
+
+```bash
+rdq skills list           # show bundled skills
+rdq skills install        # deploy to ~/.agents/skills/
+rdq skills status         # check installed version vs. binary version
+rdq skills update         # reinstall when the binary ships a newer version
+rdq skills uninstall      # remove
+```
+
+Once installed, agents that read `~/.agents/skills/` (Claude Code, etc.) can
+invoke `rdq exec` directly from natural-language requests like *"count the
+rows in the orders table"* without you having to paste the CLI manual into
+their context window each time.
+
+The `skills` subcommand does **not** need AWS credentials. Powered by
+[Songmu/skillsmith](https://github.com/Songmu/skillsmith).
+
 ## State files
 
 | Path | Purpose |
@@ -477,6 +500,7 @@ Drop the `RdqBedrock*` statements when you do not use AI features, and drop `Rdq
 | `rdq gui` | ✅ Implemented (separate React SPA, browser-based) |
 | `rdq exec <sql>` (one-shot CLI) | ✅ Implemented |
 | `rdq ask <prompt>` (one-shot CLI) | ✅ Implemented |
+| `rdq skills` (Agent Skill distribution) | ✅ Implemented (rdq-exec) |
 | Vim mode editor | 🚧 Planned |
 | Visual selection / `dd` / `p` | 🚧 Planned |
 

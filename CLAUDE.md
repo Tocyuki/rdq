@@ -20,9 +20,18 @@ review / analysis.
 a React + Vite SPA out of the Go binary. It is intentionally much
 smaller than the TUI today.
 
-`exec` and `ask` are placeholder stubs (`fmt.Printf` only) and will
-be wired to the same engines as the TUI in a future release. Treat
-them as write-from-scratch when asked to extend them.
+`exec` and `ask` are one-shot CLI modes that share the same
+read-only / destructive-confirmation gates as the TUI/GUI. Their
+real logic lives in `command/exec.go` and `command/ask.go`, with
+shared engines under `internal/runner/`. Both surfaces are fully
+implemented and have unit tests in `command/exec_test.go` and
+`command/ask_test.go`.
+
+`skills` is a subcommand handled outside Kong (early branch in
+`cmd/rdq/main.go`) that delegates to `github.com/Songmu/skillsmith`.
+It ships Agent Skills (agentskills.io spec) embedded in the binary
+and lets users `rdq skills install` them into `~/.agents/skills/`
+for AI agents (Claude Code, Copilot, Codex) to consume.
 
 `README.md` is currently an accurate source of truth for user-facing
 features and keybindings — prefer it for behavior questions.
@@ -84,6 +93,7 @@ Three layers, with most of the code living in the third:
    | `bedrock/` | Amazon Bedrock Converse client + prompt templates (`prompt.go`) |
    | `connection/` | Aurora cluster / Secrets Manager / database discovery + selection (`cluster.go`, `secret.go`, `database.go`) |
    | `history/` | Per-profile SQL history persisted as JSONL with favourites |
+   | `runner/` | RDS Data API execution (`runner.go`), result rendering (`result.go`, `render.go`), read-only classifier (`readonly.go`), destructive-statement gate (`confirm.go`). Shared by `command/exec.go`, `command/ask.go`, `internal/server/handlers_execute.go`, and `internal/tui/runner.go` so all four surfaces apply identical policies. |
    | `schema/` | `information_schema` fetch + on-disk cache keyed by (cluster, database) |
    | `server/` | GUI mode backend: `embed.go` (`//go:embed all:dist`) + `server.go` (`/api/health` + `http.FileServer`) |
    | `state/` | Per-profile state cache (`state.json`): cluster / secret / database / bedrock model + language / cluster→secret map / database history |
@@ -110,6 +120,35 @@ frontend-build` uses `find ... ! -name '.gitkeep' -delete` so the
 placeholder is preserved across rebuilds. **Do not remove `.gitkeep`
 or the `go install` path breaks.**
 
+### Skill distribution — `skills/` and the early Kong bypass
+
+Agent Skills (agentskills.io spec) are embedded via `skills/embed.go`
+(`//go:embed all:rdq-exec`) and consumed by `cmd/rdq/skills.go`. Two
+non-obvious details:
+
+1. **`skills/` lives at the repo root**, not under `internal/`. Go's
+   `//go:embed` cannot traverse `..`, so the embed directive must sit
+   in a package that is a sibling of the skill directories. Adding
+   a new skill = create `skills/<name>/SKILL.md` and append `<name>`
+   to the `//go:embed` line in `skills/embed.go`.
+2. **The `skills` subcommand is dispatched before Kong** in
+   `cmd/rdq/main.go` (`isSkillsInvocation` / `dispatchSkills`).
+   Reasons: `rdq skills` does not need AWS credentials (Kong's
+   pre-dispatch credential check would otherwise reject it), and
+   skillsmith parses its own argv via the stdlib `flag` package, so
+   running it through Kong would just be double-parsing.
+
+`SKILL.md` frontmatter `name` must equal the parent directory name
+(agentskills.io rule). Body is documentation aimed at AI agents, not
+humans — keep it under ~500 lines and split detail into
+`references/` for progressive disclosure.
+
+Version string passed to `skillsmith.New` comes from
+`runtime/debug.ReadBuildInfo` (`Main.Version`); local builds get the
+fallback `"0.0.0-dev"`. tagpr-released binaries automatically pick up
+their semver tag, which is what skillsmith stores in
+`~/.agents/skills/<name>/.skillsmith.json`.
+
 ## Implementation status (important)
 
 | Subcommand / feature | Status |
@@ -117,8 +156,9 @@ or the `go install` path breaks.**
 | `rdq` (bare, defaults to TUI) | ✅ Implemented |
 | `rdq tui` | ✅ Implemented (Bubble Tea app in `internal/tui/`) |
 | `rdq gui` | ✅ Implemented (React SPA served from embedded HTTP server) |
-| `rdq exec <sql>` (one-shot CLI) | 🚧 Stub — `command/exec.go` just `fmt.Printf`s |
-| `rdq ask <prompt>` (one-shot CLI) | 🚧 Stub — `command/ask.go` just `fmt.Printf`s |
+| `rdq exec <sql>` (one-shot CLI) | ✅ Implemented (`command/exec.go` + `internal/runner/`) |
+| `rdq ask <prompt>` (one-shot CLI) | ✅ Implemented (`command/ask.go`, layers Bedrock on top of exec) |
+| `rdq skills ...` (Agent Skill distribution) | ✅ Implemented (`cmd/rdq/skills.go` + `skills/`) |
 | Vim mode editor in TUI | 🚧 Planned |
 
 When asked to extend `rdq exec` or `rdq ask`, expect to write the

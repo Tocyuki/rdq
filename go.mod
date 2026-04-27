@@ -3,6 +3,7 @@ module github.com/Tocyuki/rdq
 go 1.25.6
 
 require (
+	github.com/Songmu/skillsmith v0.1.0
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/alecthomas/kong v1.15.0
 	github.com/atotto/clipboard v0.1.4
@@ -49,6 +50,7 @@ require (
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/gdamore/tcell/v2 v2.6.0 // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/ktr0731/go-ansisgr v0.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
@@ -67,6 +69,7 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yuin/goldmark v1.7.13 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
+	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
