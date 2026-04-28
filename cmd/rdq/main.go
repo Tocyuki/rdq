@@ -68,6 +68,8 @@ var cli struct {
 	BedrockLanguage string `help:"Language the AI uses when responding (e.g. Japanese, English). Overrides the cached language." env:"RDQ_BEDROCK_LANGUAGE"`
 	Debug           bool   `help:"Enable debug output." short:"d"`
 
+	Version kong.VersionFlag `help:"Show version and exit." short:"v" name:"version"`
+
 	Exec command.ExecCmd `cmd:"" help:"Execute a SQL statement."`
 	Ask  command.AskCmd  `cmd:"" help:"Translate natural language to SQL and execute."`
 	GUI  command.GUICmd  `cmd:"" help:"Launch browser-based SQL client."`
@@ -90,6 +92,7 @@ func main() {
 		kong.Name("rdq"),
 		kong.Description("CLI for querying Aurora via RDS Data API. See `rdq skills --help` for bundled Agent Skills."),
 		kong.UsageOnError(),
+		kong.Vars{"version": versionString()},
 	)
 
 	profile, err := resolveProfile(cli.Profile)
