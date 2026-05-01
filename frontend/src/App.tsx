@@ -2,7 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { AppShell } from '@/components/layout/AppShell'
 import { HistoryPage } from '@/features/history/HistoryPage'
-import { QueryPage } from '@/features/query/QueryPage'
+import { SqlEditorPage } from '@/features/query/SqlEditorPage'
+import { TableEditorPage } from '@/features/query/TableEditorPage'
 import { SchemaPage } from '@/features/schema/SchemaPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 
@@ -16,7 +17,8 @@ export default function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<Navigate to="/query" replace />} />
-        <Route path="/query" element={<QueryPage />} />
+        <Route path="/query" element={<TableEditorPage />} />
+        <Route path="/sql" element={<SqlEditorPage />} />
         <Route path="/history" element={<HistoryPage />} />
         <Route path="/schema" element={<SchemaPage />} />
         <Route path="/settings" element={<SettingsPage />} />

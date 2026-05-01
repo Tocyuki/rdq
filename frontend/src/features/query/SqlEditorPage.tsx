@@ -30,11 +30,13 @@ interface PendingConfirm {
 }
 
 /**
- * QueryPage hosts the editor + result stack. Destructive statements
- * trigger <ConfirmRunDialog> via the `needsConfirmation` response flag;
- * see ExecuteResponse in internal/server/types.go for the contract.
+ * SqlEditorPage is the dedicated SQL workspace: schema sidebar (in
+ * insert-on-click mode), a CodeMirror editor up top, and the live
+ * result grid below. Destructive statements trigger <ConfirmRunDialog>
+ * via the `needsConfirmation` response flag — see ExecuteResponse in
+ * internal/server/types.go.
  */
-export function QueryPage() {
+export function SqlEditorPage() {
   const session = useSession()
   const sql = useUIStore((s) => s.sql)
   const editorView = useUIStore((s) => s.editorView)
@@ -98,8 +100,6 @@ export function QueryPage() {
 
   const confirmAndRun = useCallback(() => {
     if (!pendingConfirm) return
-    // Close the dialog synchronously; the result (success or AWS error)
-    // surfaces in the Result panel below, not back on the modal.
     const args = { ...pendingConfirm.args, confirmed: true }
     setPendingConfirm(null)
     execute.mutate(args)
@@ -110,16 +110,16 @@ export function QueryPage() {
 
   return (
     <div className="h-full">
-      <PanelGroup direction="horizontal" autoSaveId="rdq:query:horizontal" className="h-full">
+      <PanelGroup direction="horizontal" autoSaveId="rdq:sql:horizontal" className="h-full">
         <Panel defaultSize={20} minSize={12} maxSize={45}>
-          <SchemaSidebar />
+          <SchemaSidebar tableClickAction="insert" />
         </Panel>
         <PanelResizeHandle className="group w-1 bg-border transition-colors hover:bg-ring data-[resize-handle-state=drag]:bg-ring" />
         <Panel defaultSize={80} minSize={35}>
           <section className="flex h-full min-w-0 flex-col">
             <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-2">
               <div>
-                <h1 className="text-sm font-semibold tracking-tight">Query</h1>
+                <h1 className="text-sm font-semibold tracking-tight">SQL Editor</h1>
                 <p className="text-xs text-muted-foreground">
                   Cmd / Ctrl + Enter to run · selection, if any, runs alone
                 </p>
@@ -152,7 +152,7 @@ export function QueryPage() {
 
             <PanelGroup
               direction="vertical"
-              autoSaveId="rdq:query:vertical"
+              autoSaveId="rdq:sql:vertical"
               className="min-h-0 flex-1"
             >
               <Panel defaultSize={40} minSize={15}>
