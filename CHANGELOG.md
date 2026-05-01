@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.0.8](https://github.com/Tocyuki/rdq/compare/v0.0.7...v0.0.8) - 2026-05-01
+- feat(cli): add -v/--version flag by @Tocyuki in https://github.com/Tocyuki/rdq/pull/23
+- feat(gui): table editor + dedicated SQL editor route by @stdhkr in https://github.com/Tocyuki/rdq/pull/25
+
 ## [v0.0.7](https://github.com/Tocyuki/rdq/compare/v0.0.6...v0.0.7) - 2026-04-27
 - feat(skills): ship rdq-exec Agent Skill via Songmu/skillsmith by @Tocyuki in https://github.com/Tocyuki/rdq/pull/21
 
