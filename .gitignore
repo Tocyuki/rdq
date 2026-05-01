@@ -14,9 +14,9 @@ rdq-*.csv
 frontend/node_modules/
 frontend/dist/
 
-# Embedded frontend build (copied from frontend/dist).
-# Keep .gitkeep so //go:embed all:dist has at least one file
-# when the module is fetched via `go install` (no local frontend build).
+# Embedded frontend build output. Release binaries are built in CI after
+# running `make frontend-build`; keep only the placeholder so //go:embed has
+# a match for source builds that intentionally skip the frontend bundle.
 internal/server/dist/*
 !internal/server/dist/.gitkeep
 
