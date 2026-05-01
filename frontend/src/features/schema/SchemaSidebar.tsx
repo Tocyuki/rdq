@@ -1,13 +1,15 @@
 import { useMemo, useState } from 'react'
 import {
   ChevronRight,
-  Copy,
+  Columns3,
   Database as DatabaseIcon,
+  Eye,
   Table as TableIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { HighlightedText } from '@/features/query/HighlightedText'
 import { sessionIsComplete, useSession } from '@/hooks/useSession'
@@ -24,28 +26,30 @@ interface GroupedTable {
 
 type SchemaGroup = readonly [string, GroupedTable[]]
 
+interface SchemaSidebarProps {
+  /**
+   * tableClickAction controls what a bare table row click does:
+   *   - 'preview' (default): open the Supabase-style preview overlay
+   *     (`SELECT * FROM schema.table LIMIT 100`) — used by the table
+   *     editor on /query.
+   *   - 'insert':  append the bare table name to the SQL editor
+   *     buffer — used by /sql, where the click pattern is mostly
+   *     "I want this identifier in my query."
+   *
+   * In both modes, ⌘ / Ctrl-click always inserts so the keyboard
+   * shortcut behaves consistently across pages. The hover-to-reveal
+   * `<>` button always opens the column-list popover regardless of
+   * mode.
+   */
+  tableClickAction?: 'preview' | 'insert'
+}
+
 /**
- * SchemaSidebar is the left pane inside QueryPage that lets users browse
- * information_schema.
- *
- * Layout: three-level tree — schema → table → column. Schemas expand by
- * default on first render so users immediately see their tables; closing
- * a schema is tracked per-name in `closedSchemas` so subsequent schema
- * data arrivals (e.g. after a cluster switch) do not reset the user's
- * choices. While a filter is active every matching group / table is
- * force-expanded so matches stay visible.
- *
- * Interactions:
- *   - Click a schema row: toggle its table list.
- *   - Click a table row: expand / collapse its column list.
- *   - Double-click a table / column: append the qualified identifier to
- *     the editor buffer via pendingEditorText.
- *   - Select (click) a column to reveal a Copy button on the right, or
- *     hover any row to see the same button. Copying emits `table.column`
- *     for columns and the bare table name for table rows so the text is
- *     ready to paste into a SELECT. Schema headers copy the schema name.
+ * SchemaSidebar is the flat schema browser shared by the table editor
+ * and SQL editor pages. Schema headers fold; table rows are flat (no
+ * inline column accordion — columns live behind the per-row popover).
  */
-export function SchemaSidebar() {
+export function SchemaSidebar({ tableClickAction = 'preview' }: SchemaSidebarProps = {}) {
   const session = useSession()
   const schema = useSchema({
     profile: session.data?.profile ?? '',
@@ -55,11 +59,11 @@ export function SchemaSidebar() {
   })
   const requestEditorText = useUIStore((s) => s.requestEditorText)
   const currentSql = useUIStore((s) => s.sql)
+  const openPreview = useUIStore((s) => s.openPreview)
+  const previewTarget = useUIStore((s) => s.previewTarget)
 
   const [filter, setFilter] = useState('')
   const [closedSchemas, setClosedSchemas] = useState<Set<string>>(new Set())
-  const [openTables, setOpenTables] = useState<Set<string>>(new Set())
-  const [selected, setSelected] = useState<string | null>(null)
 
   const tables = useMemo<GroupedTable[]>(() => {
     const cols = schema.data?.columns ?? []
@@ -94,7 +98,6 @@ export function SchemaSidebar() {
     const out: SchemaGroup[] = []
     for (const [schemaName, schemaTables] of schemaGroups) {
       if (schemaName.toLowerCase().includes(needle)) {
-        // Schema name matched → keep every table under it.
         out.push([schemaName, schemaTables])
         continue
       }
@@ -109,9 +112,6 @@ export function SchemaSidebar() {
   }, [schemaGroups, filter])
 
   if (!sessionIsComplete(session.data)) {
-    // Keep the aside structure so the surrounding PanelGroup has stable
-    // children — otherwise mounting it later would reset the user's
-    // chosen split sizes.
     return (
       <aside className="flex h-full w-full flex-col border-r border-border bg-card">
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
@@ -126,16 +126,17 @@ export function SchemaSidebar() {
     )
   }
 
-  async function copyToken(token: string) {
-    try {
-      await navigator.clipboard.writeText(token)
-      toast.success(`Copied "${token}"`)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Copy failed')
-    }
-  }
-
   const filterActive = filter.length > 0
+
+  function handleTableClick(t: GroupedTable, e: React.MouseEvent | React.KeyboardEvent) {
+    const modifier = ('metaKey' in e && e.metaKey) || ('ctrlKey' in e && e.ctrlKey)
+    if (tableClickAction === 'insert' || modifier) {
+      requestEditorText(appendToken(currentSql, t.table))
+      toast.success(`Inserted "${t.table}"`)
+      return
+    }
+    openPreview(t.schema, t.table)
+  }
 
   return (
     <aside className="flex h-full w-full flex-col border-r border-border bg-card">
@@ -176,10 +177,9 @@ export function SchemaSidebar() {
             )
             return (
               <li key={schemaName}>
-                <Row
-                  selected={selected === schemaName}
-                  onSelect={() => setSelected(schemaName)}
-                  onToggle={() => {
+                <button
+                  type="button"
+                  onClick={() => {
                     setClosedSchemas((prev) => {
                       const next = new Set(prev)
                       if (next.has(schemaName)) next.delete(schemaName)
@@ -187,11 +187,10 @@ export function SchemaSidebar() {
                       return next
                     })
                   }}
-                  onDoubleClick={() =>
-                    requestEditorText(appendToken(currentSql, schemaName))
-                  }
-                  onCopy={() => copyToken(schemaName)}
-                  copyTitle={`Copy "${schemaName}"`}
+                  className={cn(
+                    'flex w-full items-center gap-1 rounded px-1 py-0.5 text-left',
+                    'hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none',
+                  )}
                 >
                   <ChevronRight
                     className={cn(
@@ -206,84 +205,22 @@ export function SchemaSidebar() {
                   <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">
                     {schemaTables.length}·{totalCols}
                   </span>
-                </Row>
+                </button>
                 {schemaOpen && (
                   <ul className="ml-4 mt-0.5 space-y-0.5 border-l border-border/50 pl-2">
                     {schemaTables.map((t) => {
                       const key = `${t.schema}.${t.table}`
-                      const tableOpen =
-                        filterActive &&
-                        filter.length > 0 &&
-                        matchesColumn(t, filter)
-                          ? true
-                          : openTables.has(key)
-                      const qualifiedTable = `${t.schema}.${t.table}`
+                      const isActive =
+                        previewTarget?.schema === t.schema &&
+                        previewTarget?.table === t.table
                       return (
                         <li key={key}>
-                          <Row
-                            selected={selected === key}
-                            onSelect={() => setSelected(key)}
-                            onDoubleClick={() =>
-                              requestEditorText(appendToken(currentSql, t.table))
-                            }
-                            onToggle={() => {
-                              setOpenTables((prev) => {
-                                const next = new Set(prev)
-                                if (next.has(key)) next.delete(key)
-                                else next.add(key)
-                                return next
-                              })
-                            }}
-                            onCopy={() => copyToken(qualifiedTable)}
-                            copyTitle={`Copy "${qualifiedTable}"`}
-                          >
-                            <ChevronRight
-                              className={cn(
-                                'size-3.5 shrink-0 text-muted-foreground transition-transform',
-                                tableOpen && 'rotate-90',
-                              )}
-                            />
-                            <TableIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                            <span className="truncate">
-                              <HighlightedText text={t.table} term={filter} />
-                            </span>
-                            <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                              {t.columns.length}
-                            </span>
-                          </Row>
-                          {tableOpen && (
-                            <ul className="ml-5 mt-0.5 space-y-0.5">
-                              {t.columns.map((c) => {
-                                const colKey = `${key}.${c.name}`
-                                const qualified = `${t.table}.${c.name}`
-                                return (
-                                  <li key={c.name}>
-                                    <Row
-                                      selected={selected === colKey}
-                                      onSelect={() => setSelected(colKey)}
-                                      onDoubleClick={() =>
-                                        requestEditorText(
-                                          appendToken(currentSql, qualified),
-                                        )
-                                      }
-                                      onCopy={() => copyToken(qualified)}
-                                      copyTitle={`Copy "${qualified}"`}
-                                    >
-                                      <span className="truncate">
-                                        <HighlightedText
-                                          text={c.name}
-                                          term={filter}
-                                        />
-                                      </span>
-                                      <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                                        {c.type}
-                                      </span>
-                                    </Row>
-                                  </li>
-                                )
-                              })}
-                            </ul>
-                          )}
+                          <TableRow
+                            table={t}
+                            filter={filter}
+                            isActive={isActive}
+                            onClick={(e) => handleTableClick(t, e)}
+                          />
                         </li>
                       )
                     })}
@@ -294,76 +231,105 @@ export function SchemaSidebar() {
           })}
         </ul>
       </ScrollArea>
-      <div className="border-t border-border px-3 py-2 text-[10px] text-muted-foreground">
-        Double-click to insert · click to select &amp; copy
+      <div className="border-t border-border px-3 py-2 text-[10px] leading-tight text-muted-foreground">
+        {tableClickAction === 'insert'
+          ? 'Click table to insert'
+          : 'Click table to preview · ⌘-click to insert'}
       </div>
     </aside>
   )
 }
 
-function matchesColumn(t: GroupedTable, filter: string): boolean {
-  const needle = filter.toLowerCase()
-  return t.columns.some((c) => c.name.toLowerCase().includes(needle))
-}
-
-function Row({
-  selected,
-  onSelect,
-  onToggle,
-  onDoubleClick,
-  onCopy,
-  copyTitle,
-  children,
+function TableRow({
+  table,
+  filter,
+  isActive,
+  onClick,
 }: {
-  selected: boolean
-  onSelect: () => void
-  onToggle?: () => void
-  onDoubleClick: () => void
-  onCopy: () => void
-  copyTitle: string
-  children: React.ReactNode
+  table: GroupedTable
+  filter: string
+  isActive: boolean
+  onClick: (e: React.MouseEvent | React.KeyboardEvent) => void
 }) {
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={() => {
-        onSelect()
-        onToggle?.()
-      }}
-      onDoubleClick={onDoubleClick}
+      onClick={onClick}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
-          onSelect()
-          onToggle?.()
+          onClick(e)
         }
       }}
       className={cn(
-        'group flex w-full items-center gap-1 rounded px-1 py-0.5 text-left cursor-pointer',
+        'group relative flex w-full items-center gap-1 rounded px-1 py-0.5 text-left cursor-pointer',
         'hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none',
-        selected && 'bg-accent text-accent-foreground',
+        isActive && 'bg-primary/15 text-foreground ring-1 ring-primary/30',
       )}
     >
-      {children}
-      <button
-        type="button"
-        title={copyTitle}
-        aria-label={copyTitle}
-        onClick={(e) => {
-          e.stopPropagation()
-          onCopy()
-        }}
+      {isActive ? (
+        <Eye className="size-3.5 shrink-0 text-primary" />
+      ) : (
+        <TableIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      )}
+      <span className="truncate">
+        <HighlightedText text={table.table} term={filter} />
+      </span>
+      <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">
+        {table.columns.length}
+      </span>
+      <div
         className={cn(
-          'ml-1 flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-opacity',
-          'hover:bg-background hover:text-foreground',
-          // Always visible when selected; otherwise fade in on hover.
-          selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+          'flex shrink-0 items-center gap-0.5 transition-opacity',
+          isActive
+            ? 'opacity-100'
+            : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100',
         )}
       >
-        <Copy className="size-3.5" />
-      </button>
+        <ColumnsPopover table={table} />
+      </div>
     </div>
+  )
+}
+
+function ColumnsPopover({ table }: { table: GroupedTable }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title={`Columns of ${table.table}`}
+          aria-label={`Columns of ${table.table}`}
+          onClick={(e) => e.stopPropagation()}
+          className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
+        >
+          <Columns3 className="size-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="right"
+        align="start"
+        sideOffset={8}
+        className="w-72 p-0"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="border-b border-border px-3 py-2 text-xs font-medium">
+          {table.schema}.{table.table}
+          <span className="ml-2 text-muted-foreground">{table.columns.length} cols</span>
+        </div>
+        <div className="max-h-72 overflow-auto">
+          <ul className="divide-y divide-border/60 text-xs">
+            {table.columns.map((c) => (
+              <li key={c.name} className="flex items-baseline gap-2 px-3 py-1.5">
+                <span className="font-mono">{c.name}</span>
+                <span className="ml-auto text-[11px] text-muted-foreground">{c.type}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 

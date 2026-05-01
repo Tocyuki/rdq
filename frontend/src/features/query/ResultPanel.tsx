@@ -35,56 +35,10 @@ export const ResultPanel = forwardRef<ResultPanelHandle, Props>(function ResultP
   { result, error, loading },
   ref,
 ) {
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [searchTerm, setSearchTerm] = useState('')
-  const [matchCount, setMatchCount] = useState(0)
-  const [activeMatch, setActiveMatch] = useState(-1)
   const inputRef = useRef<HTMLInputElement>(null)
   const scrollRootRef = useRef<HTMLDivElement>(null)
-
-  const openSearch = useCallback(() => {
-    setSearchOpen(true)
-    // Focus after render; also select existing text so the user can retype
-    // without hitting Backspace first — the common "re-find" flow.
-    queueMicrotask(() => {
-      inputRef.current?.focus()
-      inputRef.current?.select()
-    })
-  }, [])
-
-  useImperativeHandle(ref, () => ({ openSearch }), [openSearch])
-
-  const closeSearch = useCallback(() => {
-    setSearchOpen(false)
-    setSearchTerm('')
-    setMatchCount(0)
-    setActiveMatch(-1)
-  }, [])
-
-  const stepMatch = useCallback(
-    (dir: 1 | -1) => {
-      if (matchCount === 0) return
-      setActiveMatch((i) => {
-        if (i < 0) return dir === 1 ? 0 : matchCount - 1
-        return (i + dir + matchCount) % matchCount
-      })
-    },
-    [matchCount],
-  )
-
-  // Wait for React to commit the new `data-active-match` before the
-  // scrollIntoView lookup.
-  useEffect(() => {
-    if (activeMatch < 0) return
-    const root = scrollRootRef.current
-    if (!root) return
-    const el = root.querySelector<HTMLElement>(
-      `[data-match-index="${activeMatch}"]`,
-    )
-    el?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
-  }, [activeMatch])
-
-  const trimmedTerm = searchTerm.trim()
+  const search = useResultSearch(inputRef, scrollRootRef)
+  useImperativeHandle(ref, () => ({ openSearch: search.openSearch }), [search.openSearch])
 
   return (
     <div className="flex h-full flex-col">
@@ -109,85 +63,11 @@ export const ResultPanel = forwardRef<ResultPanelHandle, Props>(function ResultP
           {!loading && !result && !error && <span>No result yet.</span>}
         </div>
         <div className="flex items-center gap-2">
-          {searchOpen && (
-            <div className="flex items-center gap-1">
-              <Search className="size-3.5 text-muted-foreground" />
-              <Input
-                ref={inputRef}
-                value={searchTerm}
-                onChange={(e) => {
-                  setSearchTerm(e.target.value)
-                  // Reset: the next Enter starts from match 0.
-                  setActiveMatch(-1)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
-                    e.preventDefault()
-                    closeSearch()
-                    return
-                  }
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    stepMatch(e.shiftKey ? -1 : 1)
-                  }
-                }}
-                placeholder="Find in result…"
-                className="h-7 w-48 text-xs"
-              />
-              {trimmedTerm && (
-                <span className="text-[11px] tabular-nums text-muted-foreground">
-                  {matchCount === 0
-                    ? 'No matches'
-                    : `${activeMatch < 0 ? 0 : activeMatch + 1} / ${matchCount}`}
-                </span>
-              )}
-              <Button
-                size="icon"
-                variant="ghost"
-                className="size-7"
-                onClick={() => stepMatch(-1)}
-                disabled={matchCount === 0}
-                title="Previous match (Shift+Enter)"
-                aria-label="Previous match"
-              >
-                <ChevronUp className="size-3.5" />
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="size-7"
-                onClick={() => stepMatch(1)}
-                disabled={matchCount === 0}
-                title="Next match (Enter)"
-                aria-label="Next match"
-              >
-                <ChevronDown className="size-3.5" />
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="size-7"
-                onClick={closeSearch}
-                title="Close search (Esc)"
-                aria-label="Close search"
-              >
-                <X className="size-3.5" />
-              </Button>
-            </div>
-          )}
-          {!searchOpen && (
-            <Button
-              size="icon"
-              variant="ghost"
-              className="size-7"
-              onClick={openSearch}
-              disabled={!result}
-              title="Find in result (Cmd/Ctrl+F)"
-              aria-label="Find in result"
-            >
-              <Search className="size-3.5" />
-            </Button>
-          )}
+          <SearchBar
+            search={search}
+            inputRef={inputRef}
+            disabled={!result}
+          />
           <CopyMenu result={result} />
           <ExportMenu result={result} />
         </div>
@@ -211,9 +91,9 @@ export const ResultPanel = forwardRef<ResultPanelHandle, Props>(function ResultP
               <ResultTable
                 columns={result.columns}
                 rows={result.rows}
-                searchTerm={searchOpen ? trimmedTerm : ''}
-                onMatchCount={setMatchCount}
-                activeMatchIndex={activeMatch}
+                searchTerm={search.activeTerm}
+                onMatchCount={search.setMatchCount}
+                activeMatchIndex={search.activeMatch}
               />
             </div>
           ) : (
@@ -255,6 +135,177 @@ export const ResultPanel = forwardRef<ResultPanelHandle, Props>(function ResultP
     </div>
   )
 })
+
+interface SearchState {
+  open: boolean
+  term: string
+  activeTerm: string
+  matchCount: number
+  activeMatch: number
+  setTerm: (s: string) => void
+  setMatchCount: (n: number) => void
+  stepMatch: (dir: 1 | -1) => void
+  openSearch: () => void
+  close: () => void
+}
+
+function useResultSearch(
+  inputRef: React.RefObject<HTMLInputElement | null>,
+  scrollRootRef: React.RefObject<HTMLDivElement | null>,
+): SearchState {
+  const [open, setOpen] = useState(false)
+  const [term, setTerm] = useState('')
+  const [matchCount, setMatchCount] = useState(0)
+  const [activeMatch, setActiveMatch] = useState(-1)
+
+  const openSearch = useCallback(() => {
+    setOpen(true)
+    queueMicrotask(() => {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    })
+  }, [inputRef])
+
+  const close = useCallback(() => {
+    setOpen(false)
+    setTerm('')
+    setMatchCount(0)
+    setActiveMatch(-1)
+  }, [])
+
+  const stepMatch = useCallback(
+    (dir: 1 | -1) => {
+      setActiveMatch((i) => {
+        if (matchCount === 0) return -1
+        if (i < 0) return dir === 1 ? 0 : matchCount - 1
+        return (i + dir + matchCount) % matchCount
+      })
+    },
+    [matchCount],
+  )
+
+  useEffect(() => {
+    if (activeMatch < 0) return
+    const root = scrollRootRef.current
+    if (!root) return
+    const el = root.querySelector<HTMLElement>(`[data-match-index="${activeMatch}"]`)
+    el?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+  }, [activeMatch, scrollRootRef])
+
+  const trimmed = term.trim()
+  return {
+    open,
+    term,
+    activeTerm: open ? trimmed : '',
+    matchCount,
+    activeMatch,
+    setTerm: (s: string) => {
+      setTerm(s)
+      setActiveMatch(-1)
+    },
+    setMatchCount,
+    stepMatch,
+    openSearch,
+    close,
+  }
+}
+
+interface SearchBarProps {
+  search: SearchState
+  inputRef: React.RefObject<HTMLInputElement | null>
+  disabled: boolean
+}
+
+function SearchBar({ search, inputRef, disabled }: SearchBarProps) {
+  const {
+    open,
+    term,
+    matchCount,
+    activeMatch,
+    setTerm,
+    stepMatch,
+    openSearch,
+    close,
+  } = search
+  if (!open) {
+    return (
+      <Button
+        size="icon"
+        variant="ghost"
+        className="size-7"
+        onClick={openSearch}
+        disabled={disabled}
+        title="Find in result (Cmd/Ctrl+F)"
+        aria-label="Find in result"
+      >
+        <Search className="size-3.5" />
+      </Button>
+    )
+  }
+  const trimmed = term.trim()
+  return (
+    <div className="flex items-center gap-1">
+      <Search className="size-3.5 text-muted-foreground" />
+      <Input
+        ref={inputRef}
+        value={term}
+        onChange={(e) => setTerm(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            close()
+            return
+          }
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            stepMatch(e.shiftKey ? -1 : 1)
+          }
+        }}
+        placeholder="Find in result…"
+        className="h-7 w-48 text-xs"
+      />
+      {trimmed && (
+        <span className="text-[11px] tabular-nums text-muted-foreground">
+          {matchCount === 0
+            ? 'No matches'
+            : `${activeMatch < 0 ? 0 : activeMatch + 1} / ${matchCount}`}
+        </span>
+      )}
+      <Button
+        size="icon"
+        variant="ghost"
+        className="size-7"
+        onClick={() => stepMatch(-1)}
+        disabled={matchCount === 0}
+        title="Previous match (Shift+Enter)"
+        aria-label="Previous match"
+      >
+        <ChevronUp className="size-3.5" />
+      </Button>
+      <Button
+        size="icon"
+        variant="ghost"
+        className="size-7"
+        onClick={() => stepMatch(1)}
+        disabled={matchCount === 0}
+        title="Next match (Enter)"
+        aria-label="Next match"
+      >
+        <ChevronDown className="size-3.5" />
+      </Button>
+      <Button
+        size="icon"
+        variant="ghost"
+        className="size-7"
+        onClick={close}
+        title="Close search (Esc)"
+        aria-label="Close search"
+      >
+        <X className="size-3.5" />
+      </Button>
+    </div>
+  )
+}
 
 function EmptyState() {
   return (

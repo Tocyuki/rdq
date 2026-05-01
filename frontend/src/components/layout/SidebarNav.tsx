@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Database, History, Play, Settings } from 'lucide-react'
+import { Database, History, Settings, SquareCode, Table2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
@@ -8,7 +8,8 @@ import { cn } from '@/lib/utils'
  * app. Icon-only to preserve real estate for the SQL editor / results.
  */
 const items = [
-  { to: '/query', label: 'Query', Icon: Play },
+  { to: '/query', label: 'Table editor', Icon: Table2 },
+  { to: '/sql', label: 'SQL editor', Icon: SquareCode },
   { to: '/history', label: 'History', Icon: History },
   { to: '/schema', label: 'Schema', Icon: Database },
   { to: '/settings', label: 'Settings', Icon: Settings },
