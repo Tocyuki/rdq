@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tocyuki/rdq/internal/aictx"
 	"github.com/Tocyuki/rdq/internal/bedrock"
 	"github.com/Tocyuki/rdq/internal/connection"
 	"github.com/Tocyuki/rdq/internal/history"
@@ -58,6 +59,11 @@ const flashLifetime = 2500 * time.Millisecond
 // review / analyze textarea overlay. Four lines is enough to show a
 // short multi-line prompt without dominating the screen.
 const askInputHeight = 4
+
+// aictxInputHeight is the visible row count of the AI-context editor
+// overlay. Twelve lines accommodates a glossary + a few rules without
+// scrolling for typical inputs.
+const aictxInputHeight = 12
 
 // clearFlashMsg is delivered by a tea.Tick scheduled when a flash message
 // is set. The token must match the current flashToken at receive time;
@@ -134,6 +140,14 @@ type Model struct {
 	bedrockModel    string
 	bedrockLanguage string
 	snapshot        *schema.Snapshot
+	// aictx is the user-authored prompt context for the active
+	// (cluster, database). Loaded asynchronously alongside snapshot;
+	// empty string means "no context configured" and we fall through
+	// to schema-only prompts.
+	aictx       string
+	aictxInput  textarea.Model
+	aictxOpen   bool
+	aictxSaving bool
 	askInput        textarea.Model
 	askOpen         bool
 	askExecuting    bool
@@ -430,6 +444,22 @@ func newModel(client *rdsdata.Client, tgt target, store *history.Store, bedrockC
 	// support that bubbletea v1 does not parse.
 	ask.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
 
+	aictxIn := textarea.New()
+	aictxIn.Placeholder = "Free-form context for AI prompts. Glossary, business rules, sample mappings — anything the schema cannot tell the model. Markdown OK."
+	// CharLimit is in runes; the aictx package enforces a stricter byte cap
+	// at save time. Quadrupling the rune budget gives Japanese / emoji
+	// users room to type past the byte limit and see the counter warning
+	// rather than silently truncating mid-word.
+	aictxIn.CharLimit = aictx.MaxContentBytes * 4
+	aictxIn.Prompt = ""
+	aictxIn.ShowLineNumbers = false
+	aictxIn.SetHeight(aictxInputHeight)
+	// Same Enter / Alt+Enter / Ctrl+J wiring as the ask textarea so plain
+	// Enter doesn't insert a newline. The actual submit happens on
+	// Ctrl+S to avoid a destructive save when the user just wants a new
+	// line — multi-line context is the default here.
+	aictxIn.KeyMap.InsertNewline.SetKeys("enter", "alt+enter", "ctrl+j")
+
 	searchIn := textinput.New()
 	searchIn.Prompt = "/"
 	searchIn.Placeholder = "search in results (case-insensitive)"
@@ -454,6 +484,7 @@ func newModel(client *rdsdata.Client, tgt target, store *history.Store, bedrockC
 		bedrockModel:    bedrockModel,
 		bedrockLanguage: bedrockLanguage,
 		askInput:        ask,
+		aictxInput:      aictxIn,
 		modelList:       ml,
 		languageList:    ll,
 		clusterList:     cl,
@@ -484,6 +515,7 @@ func (m Model) Init() tea.Cmd {
 		textarea.Blink,
 		m.spin.Tick,
 		fetchSchemaCmd(m.client, m.target),
+		loadAictxCmd(m.target.cluster, m.target.database),
 	)
 }
 
@@ -544,6 +576,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.snapshot = msg.snapshot
+
+	case aictxLoadedMsg:
+		// Errors are already swallowed in loadAictxCmd; an empty content
+		// means "no context configured" which is the safe default.
+		m.aictx = msg.content
+
+	case aictxSavedMsg:
+		m.aictxSaving = false
+		if msg.err != nil {
+			m.lastErr = fmt.Errorf("save AI context: %w", msg.err)
+			break
+		}
+		m.aictx = msg.content
+		if msg.content == "" {
+			m.flashMessage = "AI context cleared"
+		} else {
+			m.flashMessage = "AI context saved"
+		}
+		cmds = append(cmds, m.scheduleFlashClear())
 
 	case modelsLoadedMsg:
 		if msg.err != nil {
@@ -683,6 +734,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.updateSearchInput(msg))
 		case m.askOpen:
 			cmds = append(cmds, m.updateAskInput(msg))
+		case m.aictxOpen:
+			cmds = append(cmds, m.updateAictxInput(msg))
 		case m.profilePickerOpen:
 			cmds = append(cmds, m.updateProfilePicker(msg))
 		case m.clusterPickerOpen:
@@ -839,6 +892,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 	case key.Matches(msg, m.keys.ToggleReadOnly):
 		return m.toggleReadOnly(), true
+
+	case key.Matches(msg, m.keys.EditAictx):
+		return m.openAictxInput(), true
 
 	case key.Matches(msg, m.keys.ExportCSV):
 		m.handleExportCSV()
@@ -1599,6 +1655,29 @@ func (m Model) View() string {
 		}, "\n")
 	}
 
+	if m.aictxOpen {
+		// AI context editor: full multi-line textarea with Ctrl+S to save,
+		// Esc to cancel, Enter to insert newlines. Help bar advertises the
+		// (cluster, database) the context is scoped to and the current
+		// byte count so the user can see the 16 KiB cap approaching.
+		aictxBox := editorBoxFocused.Render(m.aictxInput.View())
+		scope := shortARN(m.target.cluster) + " · " + m.target.database
+		bytes := len(m.aictxInput.Value())
+		counter := fmt.Sprintf("%d / %d bytes", bytes, aictx.MaxContentBytes)
+		if bytes > aictx.MaxContentBytes {
+			counter = errorStyle.Render(counter + " · over limit")
+		} else {
+			counter = helpStyle.Render(counter)
+		}
+		hint := "AI context for " + scope + " · ctrl+s save · esc cancel · empty = clear"
+		return strings.Join([]string{
+			status,
+			aictxBox,
+			counter,
+			helpBarStyle.Render(hint),
+		}, "\n")
+	}
+
 	return strings.Join([]string{
 		status,
 		m.renderEditor(),
@@ -2155,7 +2234,7 @@ func (m *Model) startReviewFocused(focus string) tea.Cmd {
 	m.explainOpen = false
 	m.aiBusyLabel = "reviewing SQL..."
 	m.flashMessage = ""
-	systemPrompt := bedrock.BuildReviewSystemPrompt(m.target.database, m.bedrockLanguage, m.snapshot)
+	systemPrompt := bedrock.BuildReviewSystemPrompt(m.target.database, m.bedrockLanguage, m.aictx, m.snapshot)
 	cmd := reviewCmd(m.bedrockClient, m.bedrockModel, systemPrompt, m.pendingReviewSQL, focus)
 	return tea.Batch(m.spin.Tick, cmd)
 }
@@ -2179,7 +2258,7 @@ func (m *Model) startAnalyzeFocused(focus string) tea.Cmd {
 	m.explainOpen = false
 	m.aiBusyLabel = "analyzing result..."
 	m.flashMessage = ""
-	systemPrompt := bedrock.BuildAnalysisSystemPrompt(m.target.database, m.bedrockLanguage, m.snapshot)
+	systemPrompt := bedrock.BuildAnalysisSystemPrompt(m.target.database, m.bedrockLanguage, m.aictx, m.snapshot)
 	cmd := analyzeCmd(m.bedrockClient, m.bedrockModel, systemPrompt, m.pendingAnalyzeSQL, m.pendingAnalyzeBlob, focus)
 	return tea.Batch(m.spin.Tick, cmd)
 }
@@ -2578,7 +2657,7 @@ func (m *Model) startExplain() tea.Cmd {
 	if m.lastErr == nil || m.lastSQL == "" {
 		return nil
 	}
-	systemPrompt := bedrock.BuildErrorExplanationPrompt(m.target.database, m.bedrockLanguage, m.snapshot)
+	systemPrompt := bedrock.BuildErrorExplanationPrompt(m.target.database, m.bedrockLanguage, m.aictx, m.snapshot)
 	userPrompt := bedrock.BuildErrorUserPrompt(m.lastSQL, m.lastErr.Error())
 	m.explainExecuting = true
 	m.explainOpen = false
@@ -2714,12 +2793,60 @@ func (m *Model) submitAskInput() tea.Cmd {
 	m.askExecuting = true
 	m.askOpen = false
 	m.askInput.Blur()
-	systemPrompt := bedrock.BuildSystemPrompt(m.target.database, m.bedrockLanguage, m.snapshot)
+	systemPrompt := bedrock.BuildSystemPrompt(m.target.database, m.bedrockLanguage, m.aictx, m.snapshot)
 	m.askChat = append(m.askChat, bedrock.Message{Role: bedrock.RoleUser, Text: prompt})
 	// Defensive copy so the goroutine can't observe a slice that the
 	// askResultMsg handler is about to mutate.
 	conv := append([]bedrock.Message(nil), m.askChat...)
 	return tea.Batch(m.spin.Tick, askCmd(m.bedrockClient, m.bedrockModel, systemPrompt, conv, prompt))
+}
+
+// openAictxInput reveals the AI-context editor seeded with the currently
+// loaded context. Switching cluster/database refreshes m.aictx via
+// loadAictxCmd, so re-opening always shows the freshest disk state.
+func (m *Model) openAictxInput() tea.Cmd {
+	if m.target.cluster == "" || m.target.database == "" {
+		m.lastErr = errors.New("pick a cluster and database before editing AI context")
+		return nil
+	}
+	m.aictxInput.SetValue(m.aictx)
+	m.aictxOpen = true
+	m.flashMessage = ""
+	return m.aictxInput.Focus()
+}
+
+// updateAictxInput dispatches keystrokes while the AI-context editor is
+// open. Ctrl+S saves; Esc cancels without persisting; everything else is
+// forwarded to the textarea so editing keys (Ctrl+A/E/U/W and friends)
+// behave normally. Plain Enter inserts a newline because multi-line
+// prompt context is the common case.
+func (m *Model) updateAictxInput(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc":
+		m.aictxOpen = false
+		m.aictxInput.Blur()
+		return nil
+	case "ctrl+s":
+		return m.submitAictxInput()
+	}
+	var cmd tea.Cmd
+	m.aictxInput, cmd = m.aictxInput.Update(msg)
+	return cmd
+}
+
+// submitAictxInput persists the current editor value to disk via
+// saveAictxCmd. An empty payload triggers a delete inside the cmd so the
+// user can clear the entry simply by erasing the text and pressing
+// Ctrl+S. The aictxSavedMsg handler closes the overlay and surfaces a
+// flash message.
+func (m *Model) submitAictxInput() tea.Cmd {
+	if m.aictxSaving {
+		return nil
+	}
+	m.aictxSaving = true
+	m.aictxOpen = false
+	m.aictxInput.Blur()
+	return saveAictxCmd(m.target.cluster, m.target.database, m.aictxInput.Value())
 }
 
 // updateModelPicker handles input while the Bedrock model picker is open.
@@ -2848,8 +2975,12 @@ func (m *Model) applyProfileSwitch(profile string, cfg aws.Config) tea.Cmd {
 		m.target.cluster = ps.Cluster
 		m.target.secret = ps.Secret
 		m.target.database = ps.Database
+		m.aictx = ""
 		m.flashMessage = "profile: " + profile + " · " + shortARN(ps.Cluster)
-		return fetchSchemaCmd(m.client, m.target)
+		return tea.Batch(
+			fetchSchemaCmd(m.client, m.target),
+			loadAictxCmd(m.target.cluster, m.target.database),
+		)
 	}
 
 	// New / incomplete profile → drop the user straight into the cluster
@@ -3203,10 +3334,14 @@ func (m *Model) finalizeTargetSwitch(database string) tea.Cmd {
 	m.askChat = nil
 	m.clearSearch()
 	m.flashMessage = "switched to " + shortARN(m.target.cluster) + " · " + database
+	m.aictx = ""
 	if err := m.persistTarget(); err != nil {
 		log.Printf("save cluster/secret/database failed: %v", err)
 	}
-	return fetchSchemaCmd(m.client, m.target)
+	return tea.Batch(
+		fetchSchemaCmd(m.client, m.target),
+		loadAictxCmd(m.target.cluster, m.target.database),
+	)
 }
 
 // persistTarget writes the active cluster + secret back to the per-profile

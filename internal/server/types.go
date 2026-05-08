@@ -232,6 +232,28 @@ type TextResponse struct {
 	Text string `json:"text"`
 }
 
+// AiContextDTO is the response shape for GET /api/aictx. Content is the
+// user-authored prompt context for the active (cluster, database). When no
+// context is configured the field is empty and updatedAt is omitted.
+// MaxContentBytes echoes the server-side byte cap so the SPA can show
+// an accurate counter and pre-validate without hard-coding the limit.
+type AiContextDTO struct {
+	Cluster         string `json:"cluster"`
+	Database        string `json:"database"`
+	Content         string `json:"content"`
+	UpdatedAt       string `json:"updatedAt,omitempty"`
+	MaxContentBytes int    `json:"maxContentBytes"`
+}
+
+// PutAiContextRequest is the JSON body of PUT /api/aictx. Content is the
+// new prompt context to persist; an empty string is rejected (use DELETE to
+// clear the entry instead).
+type PutAiContextRequest struct {
+	Cluster  string `json:"cluster"`
+	Database string `json:"database"`
+	Content  string `json:"content"`
+}
+
 // ErrorDTO is the uniform shape for error responses. Code is a short, stable
 // string enum for programmatic handling; Message is free-form text for
 // display.

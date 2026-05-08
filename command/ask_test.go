@@ -33,6 +33,14 @@ func nilSchema() func(cluster, database string) (*schema.Snapshot, error) {
 	}
 }
 
+// fakeAictx returns a loader seam that always serves the same content.
+// Used to verify the ask CLI threads aictx into the system prompt.
+func fakeAictx(content string) func(cluster, database string) (string, error) {
+	return func(cluster, database string) (string, error) {
+		return content, nil
+	}
+}
+
 // askGlobals mirrors defaultGlobals but also sets the Bedrock fields so
 // the prompt/model validation passes. Tests that explicitly want to
 // exercise the "no model" branch clear BedrockModel after calling this.
@@ -505,5 +513,38 @@ func TestIsAllSQLComments(t *testing.T) {
 				t.Errorf("isAllSQLComments(%q)=%v, want %v", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRunAsk_PassesUserContextToBedrock(t *testing.T) {
+	setupHistoryEnv(t)
+	res := &runner.Result{Columns: []string{"n"}, Rows: [][]any{{int64(1)}}, Updated: -1}
+
+	var capturedSystemPrompt string
+	captureAsk := func(ctx context.Context, cfg aws.Config, modelID, systemPrompt, userPrompt string) (string, error) {
+		capturedSystemPrompt = systemPrompt
+		return "SELECT 1 AS n;", nil
+	}
+
+	c := &AskCmd{
+		Prompt:     []string{"give", "me", "active", "users"},
+		Output:     "json",
+		askBedrock: captureAsk,
+		loadSchema: nilSchema(),
+		loadAictx:  fakeAictx("active user = last_login_at within 30 days"),
+		executeSQL: fakeExecute(res, nil, 0),
+		loadState:  readOnlyState(nil),
+		isTerminal: func(io.Reader) bool { return false },
+	}
+	var stdout, stderr bytes.Buffer
+	code := runAsk(c, askGlobals(), strings.NewReader(""), &stdout, &stderr)
+	if code != exitSuccess {
+		t.Fatalf("exit=%d, stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(capturedSystemPrompt, "User-provided context:") {
+		t.Errorf("system prompt missing user-context heading:\n%s", capturedSystemPrompt)
+	}
+	if !strings.Contains(capturedSystemPrompt, "active user = last_login_at within 30 days") {
+		t.Errorf("system prompt missing user-context body:\n%s", capturedSystemPrompt)
 	}
 }

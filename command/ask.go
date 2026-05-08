@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tocyuki/rdq/internal/aictx"
 	"github.com/Tocyuki/rdq/internal/bedrock"
 	"github.com/Tocyuki/rdq/internal/runner"
 	"github.com/Tocyuki/rdq/internal/schema"
@@ -37,6 +38,7 @@ type AskCmd struct {
 
 	askBedrock func(ctx context.Context, cfg aws.Config, modelID, systemPrompt, userPrompt string) (string, error)
 	loadSchema func(cluster, database string) (*schema.Snapshot, error)
+	loadAictx  func(cluster, database string) (string, error)
 	executeSQL func(ctx context.Context, cfg aws.Config, target runner.Target, sql string) (*runner.Result, time.Duration, error)
 	loadState  func() (*state.State, error)
 	isTerminal func(io.Reader) bool
@@ -82,13 +84,17 @@ func runAsk(c *AskCmd, globals *Globals, stdin io.Reader, stdout, stderr io.Writ
 	// model will most likely hit the "Cannot generate SQL" path which
 	// we surface as an error below.
 	var snapshot *schema.Snapshot
+	var userContext string
 	if globals.ClusterArn != "" && globals.Database != "" {
 		if snap, err := c.loadSchema(globals.ClusterArn, globals.Database); err == nil {
 			snapshot = snap
 		}
+		if ctx, err := c.loadAictx(globals.ClusterArn, globals.Database); err == nil {
+			userContext = ctx
+		}
 	}
 
-	systemPrompt := bedrock.BuildSystemPrompt(globals.Database, globals.BedrockLanguage, snapshot)
+	systemPrompt := bedrock.BuildSystemPrompt(globals.Database, globals.BedrockLanguage, userContext, snapshot)
 
 	bedrockCtx, cancelBedrock := context.WithTimeout(context.Background(), bedrockTimeout)
 	defer cancelBedrock()
@@ -188,6 +194,9 @@ func (c *AskCmd) setDefaultSeams() {
 	}
 	if c.loadSchema == nil {
 		c.loadSchema = schema.LoadCache
+	}
+	if c.loadAictx == nil {
+		c.loadAictx = aictx.LoadContent
 	}
 	if c.executeSQL == nil {
 		c.executeSQL = defaultExecuteSQL

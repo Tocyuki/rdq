@@ -182,6 +182,21 @@ export interface TextResponse {
   text: string
 }
 
+export interface AiContext {
+  cluster: string
+  database: string
+  content: string
+  updatedAt?: string
+  /** Server-side UTF-8 byte cap; echoed so the SPA never drifts. */
+  maxContentBytes: number
+}
+
+export interface PutAiContextBody {
+  cluster: string
+  database: string
+  content: string
+}
+
 export interface ApiErrorPayload {
   error: {
     code: string

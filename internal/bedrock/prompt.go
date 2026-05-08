@@ -43,8 +43,11 @@ Always honour the language directive below for any natural-language text inside 
 // when the background fetch hasn't finished yet — in that case the prompt
 // goes out without schema rather than panicking. language is appended as a
 // natural-language directive so the assistant prefers the user's preferred
-// tongue for any commentary it does emit.
-func BuildSystemPrompt(database, language string, snapshot *schema.Snapshot) string {
+// tongue for any commentary it does emit. userContext is free-form text
+// the user has saved for the active (cluster, database) — typically a
+// glossary or business-rule cheat-sheet — and is injected before the
+// schema so the model has the human framing before the technical one.
+func BuildSystemPrompt(database, language, userContext string, snapshot *schema.Snapshot) string {
 	var b strings.Builder
 	b.WriteString(sqlAssistantPrompt)
 	b.WriteString("\n\n")
@@ -54,6 +57,7 @@ func BuildSystemPrompt(database, language string, snapshot *schema.Snapshot) str
 	}
 
 	writeLanguageDirective(&b, language)
+	writeUserContext(&b, userContext)
 
 	if snapshot != nil {
 		b.WriteString("Schema:\n")
@@ -71,6 +75,21 @@ func writeLanguageDirective(b *strings.Builder, language string) {
 		return
 	}
 	fmt.Fprintf(b, "Respond to the user in %s. SQL identifiers and keywords stay in English.\n\n", language)
+}
+
+// writeUserContext appends a "User-provided context" section when ctx is
+// non-empty. The block sits between the language directive and the schema
+// so the model reads the human framing first and the formal schema second.
+// ctx is rendered verbatim (Markdown is fine) so users can structure it
+// however suits the project — glossary, sample queries, business rules.
+func writeUserContext(b *strings.Builder, ctx string) {
+	ctx = strings.TrimSpace(ctx)
+	if ctx == "" {
+		return
+	}
+	b.WriteString("User-provided context:\n")
+	b.WriteString(ctx)
+	b.WriteString("\n\n")
 }
 
 // writeFocusArea appends a "Focus area: <text>" block to a user prompt
@@ -107,8 +126,9 @@ const errorAssistantPrompt = "You are a SQL error analyst for AWS Aurora accesse
 // BuildErrorExplanationPrompt assembles the system message for the error
 // analyst flow. snapshot may be nil; the schema section is omitted in that
 // case so the prompt still renders. language directs the model to write its
-// explanation in the user's preferred language.
-func BuildErrorExplanationPrompt(database, language string, snapshot *schema.Snapshot) string {
+// explanation in the user's preferred language. userContext is the
+// (cluster, database)-scoped free-form context.
+func BuildErrorExplanationPrompt(database, language, userContext string, snapshot *schema.Snapshot) string {
 	var b strings.Builder
 	b.WriteString(errorAssistantPrompt)
 	b.WriteString("\n\n")
@@ -118,6 +138,7 @@ func BuildErrorExplanationPrompt(database, language string, snapshot *schema.Sna
 	}
 
 	writeLanguageDirective(&b, language)
+	writeUserContext(&b, userContext)
 
 	if snapshot != nil {
 		b.WriteString("Schema:\n")
@@ -152,8 +173,9 @@ const reviewAssistantPrompt = "You are a senior SQL reviewer for AWS Aurora acce
 
 // BuildReviewSystemPrompt assembles the system message for SQL review. It
 // reuses the database / language directives and embeds the schema so the
-// reviewer can verify identifiers without guessing.
-func BuildReviewSystemPrompt(database, language string, snapshot *schema.Snapshot) string {
+// reviewer can verify identifiers without guessing. userContext is the
+// (cluster, database)-scoped free-form context.
+func BuildReviewSystemPrompt(database, language, userContext string, snapshot *schema.Snapshot) string {
 	var b strings.Builder
 	b.WriteString(reviewAssistantPrompt)
 	b.WriteString("\n\n")
@@ -161,6 +183,7 @@ func BuildReviewSystemPrompt(database, language string, snapshot *schema.Snapsho
 		fmt.Fprintf(&b, "Active database: %s\n\n", database)
 	}
 	writeLanguageDirective(&b, language)
+	writeUserContext(&b, userContext)
 	if snapshot != nil {
 		b.WriteString("Schema:\n")
 		b.WriteString(snapshot.ToPrompt())
@@ -193,8 +216,9 @@ const analyzeAssistantPrompt = "You are a data analyst helping the user understa
 
 // BuildAnalysisSystemPrompt assembles the system message for result
 // analysis. Schema is included so the model knows the data types and
-// relationships behind the columns it is interpreting.
-func BuildAnalysisSystemPrompt(database, language string, snapshot *schema.Snapshot) string {
+// relationships behind the columns it is interpreting. userContext is the
+// (cluster, database)-scoped free-form context.
+func BuildAnalysisSystemPrompt(database, language, userContext string, snapshot *schema.Snapshot) string {
 	var b strings.Builder
 	b.WriteString(analyzeAssistantPrompt)
 	b.WriteString("\n\n")
@@ -202,6 +226,7 @@ func BuildAnalysisSystemPrompt(database, language string, snapshot *schema.Snaps
 		fmt.Fprintf(&b, "Active database: %s\n\n", database)
 	}
 	writeLanguageDirective(&b, language)
+	writeUserContext(&b, userContext)
 	if snapshot != nil {
 		b.WriteString("Schema:\n")
 		b.WriteString(snapshot.ToPrompt())

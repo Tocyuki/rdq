@@ -86,4 +86,7 @@ export const api = {
   put<T>(path: string, body: unknown, signal?: AbortSignal) {
     return request<T>(path, { method: 'PUT', body, signal })
   },
+  delete<T>(path: string, signal?: AbortSignal) {
+    return request<T>(path, { method: 'DELETE', signal })
+  },
 }

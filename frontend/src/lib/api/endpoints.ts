@@ -1,5 +1,6 @@
 import { api } from './client'
 import type {
+  AiContext,
   AnalyzeRequestBody,
   AskRequestBody,
   AskResponseBody,
@@ -13,6 +14,7 @@ import type {
   History,
   Models,
   Profiles,
+  PutAiContextBody,
   ReviewRequestBody,
   Schema,
   SchemaRefreshBody,
@@ -86,4 +88,15 @@ export const endpoints = {
     api.post<TextResponse>('/api/ai/review', body, signal),
   analyze: (body: AnalyzeRequestBody, signal?: AbortSignal) =>
     api.post<TextResponse>('/api/ai/analyze', body, signal),
+
+  getAictx: (cluster: string, database: string, signal?: AbortSignal) => {
+    const q = new URLSearchParams({ cluster, database })
+    return api.get<AiContext>(`/api/aictx?${q}`, signal)
+  },
+  putAictx: (body: PutAiContextBody, signal?: AbortSignal) =>
+    api.put<AiContext>('/api/aictx', body, signal),
+  deleteAictx: (cluster: string, database: string, signal?: AbortSignal) => {
+    const q = new URLSearchParams({ cluster, database })
+    return api.delete<AiContext>(`/api/aictx?${q}`, signal)
+  },
 }
