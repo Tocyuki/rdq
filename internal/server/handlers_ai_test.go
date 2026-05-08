@@ -203,3 +203,40 @@ func TestAIMapsDeadlineTo504(t *testing.T) {
 		t.Fatalf("status = %d, want 504", rr.Code)
 	}
 }
+
+func TestAIAskTagsReadOnlyClassification(t *testing.T) {
+	cases := map[string]struct {
+		sql          string
+		wantReadOnly bool
+	}{
+		"select":   {"SELECT 1;", true},
+		"explain":  {"EXPLAIN ANALYZE SELECT 1;", true},
+		"insert":   {"INSERT INTO users(id) VALUES (1);", false},
+		"delete":   {"DELETE FROM users WHERE id = 1;", false},
+		"comments": {"-- comment\nSELECT 1;", true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeBedrock{askReply: tc.sql}
+			h := newTestAIHandlers(fake)
+			payload := AskRequest{
+				aiRequestBase: aiRequestBase{Profile: "dev", Cluster: "arn:c", Database: "app", ModelID: "m"},
+				Messages:      []MessageDTO{{Role: "user", Text: "x"}},
+			}
+			buf, _ := json.Marshal(payload)
+			req := httptest.NewRequest(http.MethodPost, "/api/ai/ask", strings.NewReader(string(buf)))
+			rr := httptest.NewRecorder()
+			h.ask(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+			}
+			var body AskResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.IsReadOnly != tc.wantReadOnly {
+				t.Errorf("isReadOnly: got %v, want %v (sql=%q)", body.IsReadOnly, tc.wantReadOnly, tc.sql)
+			}
+		})
+	}
+}

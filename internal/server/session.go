@@ -82,6 +82,10 @@ func (s *sessionStore) PersistToState() error {
 		v := *snap.IsReadOnly
 		ps.IsReadOnly = &v
 	}
+	if snap.AutoRunReadOnly != nil {
+		v := *snap.AutoRunReadOnly
+		ps.AutoRunReadOnly = &v
+	}
 	st.Set(snap.Profile, ps)
 	return st.Save()
 }
@@ -123,6 +127,10 @@ func LoadFromState(seed SessionDTO) SessionDTO {
 	if seed.IsReadOnly == nil && ps.IsReadOnly != nil {
 		v := *ps.IsReadOnly
 		seed.IsReadOnly = &v
+	}
+	if seed.AutoRunReadOnly == nil && ps.AutoRunReadOnly != nil {
+		v := *ps.AutoRunReadOnly
+		seed.AutoRunReadOnly = &v
 	}
 	return seed
 }

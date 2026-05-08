@@ -14,6 +14,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { useExecuteQuery } from '@/features/query/useExecuteQuery'
 import { useSession } from '@/hooks/useSession'
 import { endpoints } from '@/lib/api/endpoints'
 import type { Message } from '@/lib/api/types'
@@ -40,6 +41,7 @@ export function AskDialog({ open, onOpenChange }: Props) {
   const [prompt, setPrompt] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
   const requestEditorText = useUIStore((s) => s.requestEditorText)
+  const execute = useExecuteQuery()
 
   const ask = useMutation({
     mutationFn: (next: Message[]) =>
@@ -64,6 +66,32 @@ export function AskDialog({ open, onOpenChange }: Props) {
     try {
       const res = await ask.mutateAsync(nextMessages)
       setMessages([...nextMessages, { role: 'assistant', text: res.sql }])
+
+      // Auto-run shortcut: when the per-profile toggle is on AND the
+      // server's runner.IsReadOnlySQL agrees the statement is a pure
+      // read, fire it straight into /api/execute, drop the SQL into the
+      // editor for transparency, and close the dialog so results land
+      // on the main panel. Anything destructive (or with auto-run off)
+      // falls through to the existing "Insert into editor" / Run flow.
+      const auto =
+        session.data?.autoRunReadOnly === true &&
+        res.isReadOnly &&
+        !!session.data?.profile &&
+        !!session.data.cluster &&
+        !!session.data.secret &&
+        !!session.data.database
+      if (auto) {
+        requestEditorText(res.sql)
+        onOpenChange(false)
+        execute.mutate({
+          profile: session.data!.profile,
+          cluster: session.data!.cluster,
+          secret: session.data!.secret,
+          database: session.data!.database,
+          sql: res.sql,
+        })
+        toast.success('Auto-running read-only SQL…')
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Ask failed')
     }

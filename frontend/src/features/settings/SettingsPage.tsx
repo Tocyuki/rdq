@@ -1,4 +1,3 @@
-import { useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useState } from 'react'
 import { AlertTriangle, Lock, Unlock } from 'lucide-react'
@@ -6,9 +5,9 @@ import { AlertTriangle, Lock, Unlock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { ModelPicker } from '@/features/ai/ModelPicker'
-import { useSession } from '@/hooks/useSession'
-import { endpoints } from '@/lib/api/endpoints'
+import { useSaveSession, useSession } from '@/hooks/useSession'
 import type { Session } from '@/lib/api/types'
 
 /**
@@ -43,7 +42,7 @@ export function SettingsPage() {
         </p>
       )}
       {session.isSuccess && session.data && (
-        <SettingsForm key={session.data.profile} initial={session.data} onSaved={session.refetch} />
+        <SettingsForm key={session.data.profile} initial={session.data} />
       )}
     </section>
   )
@@ -59,13 +58,7 @@ function defaultProduction(v: boolean | undefined): boolean {
   return v === true
 }
 
-function SettingsForm({
-  initial,
-  onSaved,
-}: {
-  initial: Session
-  onSaved: () => unknown
-}) {
+function SettingsForm({ initial }: { initial: Session }) {
   const [model, setModel] = useState(() => initial.bedrockModel ?? '')
   const [language, setLanguage] = useState(() => initial.bedrockLanguage ?? '')
   const [production, setProduction] = useState<boolean>(() =>
@@ -74,22 +67,31 @@ function SettingsForm({
   const [readOnly, setReadOnly] = useState<boolean>(() =>
     defaultReadOnly(initial.isReadOnly),
   )
+  const [autoRun, setAutoRun] = useState<boolean>(() => initial.autoRunReadOnly === true)
 
-  const save = useMutation({
-    mutationFn: () =>
-      endpoints.putSession({
+  // useSaveSession seeds the session cache from the server's rehydrated
+  // response via setQueryData, so we do not need a follow-up refetch
+  // here. That used to live in this component as a separate
+  // session.refetch() call inside onSuccess, which made the mutation
+  // appear to stay pending across the GET round-trip — the redundant
+  // refetch is what was causing the "Saving…" label to linger.
+  const save = useSaveSession()
+
+  const onSave = () => {
+    save.mutate(
+      {
         ...initial,
         bedrockModel: model,
         bedrockLanguage: language,
         isProduction: production,
         isReadOnly: readOnly,
-      }),
-    onSuccess: () => {
-      toast.success('Settings saved')
-      onSaved()
-    },
-    onError: (err: Error) => toast.error(err.message),
-  })
+        autoRunReadOnly: autoRun,
+      },
+      {
+        onSuccess: () => toast.success('Settings saved'),
+      },
+    )
+  }
 
   return (
     <div className="mt-6 grid max-w-lg gap-6">
@@ -111,6 +113,21 @@ function SettingsForm({
         />
         <p className="text-xs text-muted-foreground">
           The natural language the model uses when responding. SQL keywords stay in English regardless.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <Switch id="auto-run" checked={autoRun} onCheckedChange={setAutoRun} />
+          <Label htmlFor="auto-run" className="cursor-pointer text-sm font-medium">
+            Auto-run AI SQL (read-only)
+          </Label>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          When on, SQL the model returns from Ask is executed immediately if the server
+          classifies it as a pure read (SELECT / WITH / SHOW / EXPLAIN / DESCRIBE / DESC /
+          TABLE / VALUES). Anything destructive falls through to the normal{' '}
+          <em>insert into editor → Run</em> flow. Manual editor SQL is not affected.
         </p>
       </div>
 
@@ -162,7 +179,7 @@ function SettingsForm({
       </fieldset>
 
       <div>
-        <Button onClick={() => save.mutate()} disabled={save.isPending}>
+        <Button onClick={onSave} disabled={save.isPending}>
           {save.isPending ? 'Saving…' : 'Save'}
         </Button>
       </div>
