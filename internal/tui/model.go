@@ -144,14 +144,14 @@ type Model struct {
 	// (cluster, database). Loaded asynchronously alongside snapshot;
 	// empty string means "no context configured" and we fall through
 	// to schema-only prompts.
-	aictx       string
-	aictxInput  textarea.Model
-	aictxOpen   bool
-	aictxSaving bool
-	askInput        textarea.Model
-	askOpen         bool
-	askExecuting    bool
-	askKind         askKind
+	aictx        string
+	aictxInput   textarea.Model
+	aictxOpen    bool
+	aictxSaving  bool
+	askInput     textarea.Model
+	askOpen      bool
+	askExecuting bool
+	askKind      askKind
 	// pending* hold the editor SQL / result snapshot captured when F6
 	// opens the focus-area overlay, so the model sees the state the
 	// user actually pointed at even if they mutate the editor / result
