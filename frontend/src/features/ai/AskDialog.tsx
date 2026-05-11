@@ -25,6 +25,7 @@ import { ModelPicker } from './ModelPicker'
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
+  onAutoRun: (sql: string) => void
 }
 
 /**
@@ -33,7 +34,7 @@ interface Props {
  * preserved while the user iterates. "Insert into editor" replaces the
  * CodeMirror buffer via the pendingEditorText slot.
  */
-export function AskDialog({ open, onOpenChange }: Props) {
+export function AskDialog({ open, onOpenChange, onAutoRun }: Props) {
   const session = useSession()
   const [model, setModel] = useState(() => session.data?.bedrockModel ?? '')
   const [language, setLanguage] = useState(() => session.data?.bedrockLanguage ?? 'Japanese')
@@ -64,6 +65,26 @@ export function AskDialog({ open, onOpenChange }: Props) {
     try {
       const res = await ask.mutateAsync(nextMessages)
       setMessages([...nextMessages, { role: 'assistant', text: res.sql }])
+
+      // Auto-run shortcut: when the per-profile toggle is on AND the
+      // server's runner.IsReadOnlySQL agrees the statement is a pure
+      // read, fire it straight into /api/execute, drop the SQL into the
+      // editor for transparency, and close the dialog so results land
+      // on the main panel. Anything destructive (or with auto-run off)
+      // falls through to the existing "Insert into editor" / Run flow.
+      const auto =
+        session.data?.autoRunReadOnly === true &&
+        res.autoRunnable &&
+        !!session.data?.profile &&
+        !!session.data.cluster &&
+        !!session.data.secret &&
+        !!session.data.database
+      if (auto) {
+        requestEditorText(res.sql)
+        onOpenChange(false)
+        onAutoRun(res.sql)
+        toast.success('Auto-running read-only SQL…')
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Ask failed')
     }

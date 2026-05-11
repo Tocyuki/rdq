@@ -111,14 +111,14 @@ directory that lives **inside `internal/server/`**, not
 location before the Go build runs — this coupling is the single most
 important build detail in the repo.
 
-A single tracked `internal/server/dist/.gitkeep` exists so that
-`//go:embed all:dist` has at least one matching file when the module
-is fetched via `go install` (where `frontend/dist` is never built).
-`.gitignore` excludes everything else under that directory with an
-`internal/server/dist/*` + `!.../.gitkeep` pair, and `make
-frontend-build` uses `find ... ! -name '.gitkeep' -delete` so the
-placeholder is preserved across rebuilds. **Do not remove `.gitkeep`
-or the `go install` path breaks.**
+Only `internal/server/dist/.gitkeep` is tracked. Generated files under
+`internal/server/dist/` are intentionally ignored so the repository does
+not carry frontend build artifacts. Release binaries are built in CI by
+running `make frontend-build` before GoReleaser compiles the Go binary,
+which embeds the generated files into `rdq gui`. A plain `go install`
+from module source does not run npm and therefore does not provide a
+working GUI bundle; use the Homebrew Cask or release archives for GUI
+installs.
 
 ### Skill distribution — `skills/` and the early Kong bypass
 

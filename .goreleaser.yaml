@@ -44,6 +44,20 @@ archives:
 checksum:
   name_template: 'checksums.txt'
 
+homebrew_casks:
+  - name: rdq
+    ids:
+      - rdq
+    repository:
+      owner: Tocyuki
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/Tocyuki/rdq"
+    description: "Read-only database query tool for Aurora/RDS"
+    binaries:
+      - rdq
+
 changelog:
   disable: true
 

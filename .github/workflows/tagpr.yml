@@ -29,68 +29,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # When tagpr has an open release PR (but no new tag yet), push the
-      # freshly built frontend bundle into that PR so the eventual tag
-      # commit embeds it. This is what lets `go install @latest` launch
-      # `rdq gui` without the SPA assets going missing. The cleanup
-      # workflow (post-release.yml) then removes the bundle from main
-      # HEAD so the repo stays clean between releases.
-      # The `tag` guard is load-bearing: tagpr populates `pull_request`
-      # in BOTH the "open/update release PR" mode (tag empty) and the
-      # "tag just cut after release PR merge" mode (tag set, PR already
-      # merged → branch deleted). Without the guard the bundle-push
-      # steps below try to checkout the deleted branch and fail,
-      # aborting the job before GoReleaser runs.
-      - id: extract-pr
-        if: steps.tagpr.outputs.pull_request != '' && steps.tagpr.outputs.tag == ''
-        env:
-          HEAD_REF: ${{ fromJSON(steps.tagpr.outputs.pull_request).head.ref }}
-        run: |
-          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
-
-      # Re-checkout with actions/checkout@v5 (not a manual git checkout) so
-      # that (1) the dirty CHANGELOG.md tagpr leaves in the workspace is
-      # wiped, and (2) credentials are persisted for the later `git push`
-      # that commits the frontend bundle back into the release branch.
-      # The initial checkout above uses persist-credentials: false, which
-      # is safe for the tagpr action (it uses GITHUB_TOKEN directly via
-      # the API) but would break the bundle push here.
-      - name: Checkout tagpr release PR branch
-        if: steps.extract-pr.outputs.head_ref != ''
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ steps.extract-pr.outputs.head_ref }}
-          fetch-depth: 0
-
-      - name: Set up Node (for release PR bundle)
-        if: steps.extract-pr.outputs.head_ref != ''
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies (for release PR bundle)
-        if: steps.extract-pr.outputs.head_ref != ''
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build and commit frontend bundle into release PR
-        if: steps.extract-pr.outputs.head_ref != ''
-        env:
-          PR_BRANCH: ${{ steps.extract-pr.outputs.head_ref }}
-        run: |
-          make frontend-build
-          git add -f internal/server/dist/
-          if git diff --cached --quiet; then
-            echo "frontend bundle unchanged, nothing to commit"
-            exit 0
-          fi
-          git -c user.name="github-actions[bot]" \
-              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -m "chore(release): embed frontend bundle for go install"
-          git push origin "HEAD:$PR_BRANCH"
-
       - name: Set up Go
         if: steps.tagpr.outputs.tag != ''
         uses: actions/setup-go@v6
@@ -120,3 +58,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

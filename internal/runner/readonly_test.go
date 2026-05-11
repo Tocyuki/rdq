@@ -61,3 +61,27 @@ func TestIsReadOnlySQL(t *testing.T) {
 		})
 	}
 }
+
+func TestIsAutoRunnableSQL(t *testing.T) {
+	cases := []struct {
+		name string
+		sql  string
+		want bool
+	}{
+		{"select", "SELECT 1", true},
+		{"with select", "WITH c AS (SELECT 1) SELECT * FROM c", true},
+		{"show", "SHOW TABLES", true},
+		{"plain explain", "EXPLAIN SELECT 1", false},
+		{"explain analyze select", "EXPLAIN ANALYZE SELECT 1", false},
+		{"explain analyze delete", "EXPLAIN ANALYZE DELETE FROM users", false},
+		{"delete", "DELETE FROM users", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsAutoRunnableSQL(tc.sql)
+			if got != tc.want {
+				t.Errorf("IsAutoRunnableSQL(%q) = %v, want %v", tc.sql, got, tc.want)
+			}
+		})
+	}
+}

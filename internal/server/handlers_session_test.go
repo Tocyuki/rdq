@@ -139,6 +139,76 @@ func TestPutSessionProductionFlagRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPutSessionAutoRunReadOnlyRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RDQ_STATE_FILE", filepath.Join(dir, "state.json"))
+
+	h := newTestSessionHandlers(SessionDTO{}, nil)
+	trueVal := true
+	payload := SessionDTO{
+		Profile:         "dev",
+		Cluster:         "arn:c",
+		Secret:          "arn:s",
+		Database:        "app",
+		AutoRunReadOnly: &trueVal,
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPut, "/api/session", strings.NewReader(string(body)))
+	rr := httptest.NewRecorder()
+	h.putSession(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	// LoadFromState should recover AutoRunReadOnly=true after persistence
+	// and apply the same tri-state merge as IsProduction / IsReadOnly:
+	// a nil delta on the seed lets the stored value bubble back up.
+	seeded := LoadFromState(SessionDTO{Profile: "dev"})
+	if seeded.AutoRunReadOnly == nil || !*seeded.AutoRunReadOnly {
+		t.Errorf("expected AutoRunReadOnly=true after state.json round trip, got %v", seeded.AutoRunReadOnly)
+	}
+}
+
+func TestPutSessionAutoRunReadOnlyHonorsExplicitFalse(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RDQ_STATE_FILE", filepath.Join(dir, "state.json"))
+
+	h := newTestSessionHandlers(SessionDTO{}, nil)
+
+	// Save true first, then override with explicit false. The flag must
+	// land on disk as false (not nil) so the SPA toggle round-trips
+	// correctly.
+	trueVal := true
+	first, _ := json.Marshal(SessionDTO{
+		Profile: "dev", Cluster: "arn:c", Secret: "arn:s", Database: "app",
+		AutoRunReadOnly: &trueVal,
+	})
+	rr := httptest.NewRecorder()
+	h.putSession(rr, httptest.NewRequest(http.MethodPut, "/api/session", strings.NewReader(string(first))))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("first put status = %d", rr.Code)
+	}
+
+	falseVal := false
+	second, _ := json.Marshal(SessionDTO{
+		Profile: "dev", Cluster: "arn:c", Secret: "arn:s", Database: "app",
+		AutoRunReadOnly: &falseVal,
+	})
+	rr = httptest.NewRecorder()
+	h.putSession(rr, httptest.NewRequest(http.MethodPut, "/api/session", strings.NewReader(string(second))))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("second put status = %d", rr.Code)
+	}
+
+	seeded := LoadFromState(SessionDTO{Profile: "dev"})
+	if seeded.AutoRunReadOnly == nil {
+		t.Fatal("expected AutoRunReadOnly to be persisted as explicit false, got nil")
+	}
+	if *seeded.AutoRunReadOnly {
+		t.Errorf("expected AutoRunReadOnly=false after explicit override, got true")
+	}
+}
+
 func TestPutSessionEphemeralDoesNotWriteState(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")

@@ -87,13 +87,21 @@ Launch with `rdq gui`. The server binds to `127.0.0.1` and opens a browser windo
 
 ## Installation
 
-### `go install` (recommended)
+### Homebrew Cask (recommended for macOS)
+
+```bash
+brew install --cask Tocyuki/tap/rdq
+```
+
+The Homebrew Cask installs the prebuilt release binary, which includes the embedded frontend bundle used by `rdq gui`.
+
+### `go install`
 
 ```bash
 go install github.com/Tocyuki/rdq/cmd/rdq@latest
 ```
 
-Tagged releases include the compiled frontend bundle, so `rdq` (TUI), `rdq exec`, and `rdq gui` all work out of the box. Pinning a non-release revision (`@main`, `@<commit-sha>`) still installs a usable TUI / `exec` binary, but `rdq gui` will exit with an explanatory error because the frontend bundle is only committed to release tag commits.
+`go install` builds from the module source and does not run the frontend build, so it is intended for the TUI / `exec` workflows. Use Homebrew Cask or a prebuilt release binary if you need `rdq gui`.
 
 #### Troubleshooting: `sum.golang.org` verification failure
 
@@ -117,7 +125,7 @@ Workarounds, in order of preference:
    ```bash
    GOPROXY=direct GOSUMDB=off go install github.com/Tocyuki/rdq/cmd/rdq@latest
    ```
-4. If none of the above work, grab a [prebuilt release binary](#prebuilt-release-binaries).
+4. If none of the above work, install the [Homebrew Cask](#homebrew-cask-recommended-for-macos) or grab a [prebuilt release binary](#prebuilt-release-binaries).
 
 > Do **not** set `GOSUMDB=off` permanently in your shell profile — it disables supply-chain integrity checks for every Go module you install, not just `rdq`. Scope it to the single command instead.
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/Tocyuki/rdq/internal/aictx"
 	"github.com/Tocyuki/rdq/internal/bedrock"
+	"github.com/Tocyuki/rdq/internal/runner"
 	"github.com/Tocyuki/rdq/internal/schema"
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
@@ -108,7 +109,11 @@ func (h *aiHandlers) ask(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, aiStatus(err), errCodeAWSError, err.Error())
 		return
 	}
-	writeJSON(w, AskResponse{SQL: sql})
+	writeJSON(w, AskResponse{
+		SQL:          sql,
+		IsReadOnly:   runner.IsReadOnlySQL(sql),
+		AutoRunnable: runner.IsAutoRunnableSQL(sql),
+	})
 }
 
 // explain serves POST /api/ai/explain — analyze a SQL error.

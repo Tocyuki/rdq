@@ -234,3 +234,45 @@ func TestAIAskInjectsAictxIntoSystemPrompt(t *testing.T) {
 		t.Errorf("expected user-context body in system prompt:\n%s", fake.seenSystem)
 	}
 }
+
+func TestAIAskTagsReadOnlyClassification(t *testing.T) {
+	cases := map[string]struct {
+		sql              string
+		wantReadOnly     bool
+		wantAutoRunnable bool
+	}{
+		"select":                 {"SELECT 1;", true, true},
+		"explain":                {"EXPLAIN ANALYZE SELECT 1;", true, false},
+		"explain analyze delete": {"EXPLAIN ANALYZE DELETE FROM users;", true, false},
+		"insert":                 {"INSERT INTO users(id) VALUES (1);", false, false},
+		"delete":                 {"DELETE FROM users WHERE id = 1;", false, false},
+		"comments":               {"-- comment\nSELECT 1;", true, true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeBedrock{askReply: tc.sql}
+			h := newTestAIHandlers(fake)
+			payload := AskRequest{
+				aiRequestBase: aiRequestBase{Profile: "dev", Cluster: "arn:c", Database: "app", ModelID: "m"},
+				Messages:      []MessageDTO{{Role: "user", Text: "x"}},
+			}
+			buf, _ := json.Marshal(payload)
+			req := httptest.NewRequest(http.MethodPost, "/api/ai/ask", strings.NewReader(string(buf)))
+			rr := httptest.NewRecorder()
+			h.ask(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+			}
+			var body AskResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.IsReadOnly != tc.wantReadOnly {
+				t.Errorf("isReadOnly: got %v, want %v (sql=%q)", body.IsReadOnly, tc.wantReadOnly, tc.sql)
+			}
+			if body.AutoRunnable != tc.wantAutoRunnable {
+				t.Errorf("autoRunnable: got %v, want %v (sql=%q)", body.AutoRunnable, tc.wantAutoRunnable, tc.sql)
+			}
+		})
+	}
+}
