@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.0.9](https://github.com/Tocyuki/rdq/compare/v0.0.8...v0.0.9) - 2026-05-11
+- feat(ai): auto-run AI-generated read-only SQL behind a settings toggle by @stdhkr in https://github.com/Tocyuki/rdq/pull/28
+- feat: publish Homebrew Cask releases by @Tocyuki in https://github.com/Tocyuki/rdq/pull/26
+
 ## [v0.0.8](https://github.com/Tocyuki/rdq/compare/v0.0.7...v0.0.8) - 2026-05-01
 - feat(cli): add -v/--version flag by @Tocyuki in https://github.com/Tocyuki/rdq/pull/23
 - feat(gui): table editor + dedicated SQL editor route by @stdhkr in https://github.com/Tocyuki/rdq/pull/25
