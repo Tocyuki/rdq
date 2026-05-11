@@ -49,6 +49,12 @@ type ProfileState struct {
 	// to "enabled" at runtime so a fresh install is safe out of the box;
 	// users who actively want to run writes must flip it off in Settings.
 	IsReadOnly *bool `json:"is_read_only,omitempty"`
+	// AutoRunReadOnly, when true, automatically executes AI-generated SQL
+	// the moment it comes back from Bedrock, provided runner.IsReadOnly
+	// classifies it as a safe read. nil / false leaves the existing flow
+	// (paste into editor, wait for Run) untouched. Manually authored SQL
+	// is unaffected — auto-run only short-circuits the AI pipeline.
+	AutoRunReadOnly *bool `json:"auto_run_read_only,omitempty"`
 }
 
 // Load reads the state file. A missing file yields an empty State; a malformed

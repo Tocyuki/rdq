@@ -29,6 +29,13 @@ export interface Session {
    * errCodeReadOnly (HTTP 403).
    */
   isReadOnly?: boolean
+  /**
+   * When true, AI-generated SQL that the server classifies as read-only is
+   * dispatched to /api/execute the moment Bedrock returns it — no manual
+   * Run press required. undefined / false leaves the existing review-then-
+   * run flow intact. Manual editor SQL is unaffected.
+   */
+  autoRunReadOnly?: boolean
 }
 
 export interface Health {
@@ -160,6 +167,8 @@ export interface AskRequestBody extends AIRequestBase {
 
 export interface AskResponseBody {
   sql: string
+  /** Server-side runner.IsReadOnlySQL classification of the returned SQL. */
+  isReadOnly: boolean
 }
 
 export interface ExplainRequestBody extends AIRequestBase {

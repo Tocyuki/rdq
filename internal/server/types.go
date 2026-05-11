@@ -23,6 +23,12 @@ type SessionDTO struct {
 	BedrockLanguage string `json:"bedrockLanguage"`
 	IsProduction    *bool  `json:"isProduction,omitempty"`
 	IsReadOnly      *bool  `json:"isReadOnly,omitempty"`
+	// AutoRunReadOnly mirrors state.ProfileState.AutoRunReadOnly: when
+	// true, the SPA fires the freshly generated AI SQL into /api/execute
+	// the moment Bedrock returns it, provided the runner classifies the
+	// statement as read-only. nil / false leaves the existing review-then-
+	// run flow intact.
+	AutoRunReadOnly *bool `json:"autoRunReadOnly,omitempty"`
 }
 
 // HealthDTO is the JSON body of /api/health.
@@ -197,9 +203,13 @@ type AskRequest struct {
 }
 
 // AskResponse is the JSON body of POST /api/ai/ask. The SQL has already
-// been stripped of Markdown code fences by bedrock.Ask.
+// been stripped of Markdown code fences by bedrock.Ask. IsReadOnly is the
+// runner.IsReadOnlySQL classification of the same SQL, returned alongside
+// so the SPA can drive the auto-run shortcut without re-implementing the
+// classifier in TypeScript.
 type AskResponse struct {
-	SQL string `json:"sql"`
+	SQL        string `json:"sql"`
+	IsReadOnly bool   `json:"isReadOnly"`
 }
 
 // ExplainRequest is the JSON body of POST /api/ai/explain.
