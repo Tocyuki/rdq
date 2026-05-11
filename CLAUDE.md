@@ -120,6 +120,25 @@ from module source does not run npm and therefore does not provide a
 working GUI bundle; use the Homebrew Cask or release archives for GUI
 installs.
 
+### macOS release signing and notarization
+
+`tagpr.yml` verifies the release secrets before running GoReleaser for a
+new tag. Required repository secrets:
+
+- `HOMEBREW_TAP_GITHUB_TOKEN` — token with contents write access to
+  `Tocyuki/homebrew-tap`
+- `MACOS_SIGN_P12` — base64-encoded Developer ID Application `.p12`
+  certificate
+- `MACOS_SIGN_PASSWORD` — password for the `.p12`
+- `MACOS_NOTARY_KEY` — base64-encoded App Store Connect API `.p8` key
+- `MACOS_NOTARY_KEY_ID` — App Store Connect key ID
+- `MACOS_NOTARY_ISSUER_ID` — App Store Connect issuer UUID
+
+GoReleaser uses these values to sign and notarize the darwin `rdq`
+binaries before archiving them and publishing the Homebrew Cask. If any
+secret is missing, the release workflow fails before publishing an
+unsigned macOS binary.
+
 ### Skill distribution — `skills/` and the early Kong bypass
 
 Agent Skills (agentskills.io spec) are embedded via `skills/embed.go`
