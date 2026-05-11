@@ -26,8 +26,8 @@ func TestVerifyFrontendEmbed_Missing(t *testing.T) {
 	msg := err.Error()
 	for _, want := range []string{
 		"embedded frontend is missing",
-		"cmd/rdq@latest",
-		"make build",
+		"brew install --cask",
+		"make frontend-build go-build",
 		"releases",
 	} {
 		if !strings.Contains(msg, want) {

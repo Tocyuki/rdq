@@ -76,5 +76,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
-        run: npm run build
+      - name: Build embedded frontend bundle
+        working-directory: .
+        run: make frontend-build
+
+      - name: Verify embedded frontend bundle is not tracked
+        working-directory: .
+        run: |
+          status="$(git status --porcelain -- internal/server/dist)"
+          if [ -n "$status" ]; then
+            echo "$status"
+            exit 1
+          fi

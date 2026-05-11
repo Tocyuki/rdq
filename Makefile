@@ -16,7 +16,8 @@ dev:
 
 clean:
 	rm -f rdq
-	rm -rf frontend/dist internal/server/dist
+	rm -rf frontend/dist
+	find internal/server/dist -mindepth 1 ! -name '.gitkeep' -delete
 
 # fmt rewrites every Go file in the repo with gofmt. Run this after
 # touching struct literals or anywhere alignment matters — or just run
