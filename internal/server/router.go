@@ -46,6 +46,11 @@ func buildRouter(deps handlerDeps) http.Handler {
 	mux.HandleFunc("POST /api/ai/review", ai.review)
 	mux.HandleFunc("POST /api/ai/analyze", ai.analyze)
 
+	aictxH := newAictxHandlers()
+	mux.HandleFunc("GET /api/aictx", aictxH.get)
+	mux.HandleFunc("PUT /api/aictx", aictxH.put)
+	mux.HandleFunc("DELETE /api/aictx", aictxH.del)
+
 	// SPA static + fallback handler. Mounted on the root so it catches
 	// everything the API router did not.
 	mux.Handle("/", spaHandler(deps.distFS))

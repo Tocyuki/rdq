@@ -19,6 +19,7 @@ type keyMap struct {
 	SwitchProfile    key.Binding
 	ToggleProduction key.Binding
 	ToggleReadOnly   key.Binding
+	EditAictx        key.Binding
 	ExportCSV        key.Binding
 	Clear            key.Binding
 	Help             key.Binding
@@ -83,6 +84,10 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("f8"),
 			key.WithHelp("F8", "toggle read-only mode"),
 		),
+		EditAictx: key.NewBinding(
+			key.WithKeys("f9"),
+			key.WithHelp("F9", "edit AI context"),
+		),
 		ExportCSV: key.NewBinding(
 			key.WithKeys("ctrl+e"),
 			key.WithHelp("^E", "export csv"),
@@ -104,6 +109,11 @@ func defaultKeyMap() keyMap {
 
 // ShortHelp / FullHelp implement bubbles/help.KeyMap so the help bar can
 // render the bindings in compact and expanded forms.
+//
+// EditAictx (F9) is intentionally absent from ShortHelp: AI context is a
+// "set up once, forget" action, and the compact bar is already crowded
+// at narrow widths. Users who want it can press `?` to expand into
+// FullHelp, where it lives next to Ask / Assist.
 func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Run, k.Ask, k.Assist, k.SwitchModel, k.SwitchLanguage, k.SwitchProfile, k.SwitchTarget, k.SwitchSecret, k.History, k.ExportCSV, k.Quit}
 }
@@ -111,7 +121,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Run, k.Focus, k.ToggleView, k.Inspect},
-		{k.Ask, k.Assist, k.SwitchModel, k.SwitchLanguage},
+		{k.Ask, k.Assist, k.EditAictx, k.SwitchModel, k.SwitchLanguage},
 		{k.SwitchProfile, k.SwitchTarget, k.SwitchSecret, k.ToggleProduction, k.ToggleReadOnly},
 		{k.History, k.ExportCSV, k.Clear, k.Help, k.Quit},
 	}

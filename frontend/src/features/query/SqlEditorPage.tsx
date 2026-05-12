@@ -98,6 +98,21 @@ export function SqlEditorPage() {
     })
   }, [session.data, sql, editorView, execute])
 
+  const runAutoSql = useCallback((autoSql: string) => {
+    if (!sessionIsComplete(session.data)) {
+      toast.error('Pick a profile, cluster, secret, and database first.')
+      return
+    }
+    const data = session.data!
+    execute.mutate({
+      profile: data.profile,
+      cluster: data.cluster,
+      secret: data.secret,
+      database: data.database,
+      sql: autoSql,
+    })
+  }, [session.data, execute])
+
   const confirmAndRun = useCallback(() => {
     if (!pendingConfirm) return
     const args = { ...pendingConfirm.args, confirmed: true }
@@ -177,7 +192,7 @@ export function SqlEditorPage() {
           </section>
         </Panel>
       </PanelGroup>
-      <AskDialog open={askOpen} onOpenChange={setAskOpen} />
+      <AskDialog open={askOpen} onOpenChange={setAskOpen} onAutoRun={runAutoSql} />
       <ReviewDialog open={reviewOpen} onOpenChange={setReviewOpen} />
       <AnalyzeDialog open={analyzeOpen} onOpenChange={setAnalyzeOpen} />
       <ExplainDialog

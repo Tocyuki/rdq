@@ -15,6 +15,7 @@ const (
 	maxFavoriteBodyBytes      int64 = 8 << 10
 	maxAIBodyBytes            int64 = 512 << 10
 	maxAnalyzeBodyBytes       int64 = 2 << 20
+	maxAictxBodyBytes         int64 = 32 << 10
 )
 
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) bool {

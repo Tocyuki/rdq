@@ -204,12 +204,12 @@ type AskRequest struct {
 
 // AskResponse is the JSON body of POST /api/ai/ask. The SQL has already
 // been stripped of Markdown code fences by bedrock.Ask. IsReadOnly is the
-// runner.IsReadOnlySQL classification of the same SQL, returned alongside
-// so the SPA can drive the auto-run shortcut without re-implementing the
-// classifier in TypeScript.
+// runner.IsReadOnlySQL classification of the same SQL; AutoRunnable is the
+// stricter server-side gate the SPA uses for immediate execution.
 type AskResponse struct {
-	SQL        string `json:"sql"`
-	IsReadOnly bool   `json:"isReadOnly"`
+	SQL          string `json:"sql"`
+	IsReadOnly   bool   `json:"isReadOnly"`
+	AutoRunnable bool   `json:"autoRunnable"`
 }
 
 // ExplainRequest is the JSON body of POST /api/ai/explain.
@@ -240,6 +240,28 @@ type AnalyzeRequest struct {
 // and /api/ai/analyze. The text is raw Markdown from Bedrock.
 type TextResponse struct {
 	Text string `json:"text"`
+}
+
+// AiContextDTO is the response shape for GET /api/aictx. Content is the
+// user-authored prompt context for the active (cluster, database). When no
+// context is configured the field is empty and updatedAt is omitted.
+// MaxContentBytes echoes the server-side byte cap so the SPA can show
+// an accurate counter and pre-validate without hard-coding the limit.
+type AiContextDTO struct {
+	Cluster         string `json:"cluster"`
+	Database        string `json:"database"`
+	Content         string `json:"content"`
+	UpdatedAt       string `json:"updatedAt,omitempty"`
+	MaxContentBytes int    `json:"maxContentBytes"`
+}
+
+// PutAiContextRequest is the JSON body of PUT /api/aictx. Content is the
+// new prompt context to persist; an empty string is rejected (use DELETE to
+// clear the entry instead).
+type PutAiContextRequest struct {
+	Cluster  string `json:"cluster"`
+	Database string `json:"database"`
+	Content  string `json:"content"`
 }
 
 // ErrorDTO is the uniform shape for error responses. Code is a short, stable

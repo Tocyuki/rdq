@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { AiContextPanel } from '@/features/ai/AiContextPanel'
 import { ModelPicker } from '@/features/ai/ModelPicker'
 import { useSaveSession, useSession } from '@/hooks/useSession'
 import type { Session } from '@/lib/api/types'
@@ -27,7 +28,7 @@ export function SettingsPage() {
   const session = useSession()
 
   return (
-    <section className="flex h-full flex-col p-6">
+    <section className="flex h-full flex-col overflow-y-auto p-6 pb-12">
       <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
       <p className="mt-1 text-sm text-muted-foreground">
         Per-profile preferences, saved to <code className="font-mono">~/.rdq/state.json</code>.
@@ -183,8 +184,29 @@ function SettingsForm({ initial }: { initial: Session }) {
           {save.isPending ? 'Saving…' : 'Save'}
         </Button>
       </div>
+
+      <section className="mt-4 space-y-2 border-t pt-6">
+        <div>
+          <h2 className="text-sm font-semibold">AI context for this database</h2>
+          <p className="text-xs text-muted-foreground">
+            Free-form text injected into every Bedrock prompt for{' '}
+            <code className="font-mono">{initial.database || '(no database)'}</code> on{' '}
+            <code className="font-mono">{initial.cluster ? truncateArn(initial.cluster) : '(no cluster)'}</code>.
+            Use it for glossary terms, business rules, and example queries — anything the schema alone cannot tell the model.
+          </p>
+        </div>
+        <AiContextPanel cluster={initial.cluster} database={initial.database} />
+      </section>
     </div>
   )
+}
+
+// truncateArn shortens an ARN to "<service>:…:<resource>" so the
+// settings header stays readable.
+function truncateArn(arn: string): string {
+  const parts = arn.split(':')
+  if (parts.length < 6) return arn
+  return `${parts[2]}:…:${parts[parts.length - 1]}`
 }
 
 function BoolOption({

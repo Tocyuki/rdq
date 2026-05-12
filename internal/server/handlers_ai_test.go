@@ -48,6 +48,7 @@ func newTestAIHandlers(fake *fakeBedrock) *aiHandlers {
 	h := newAIHandlers(c)
 	h.newClient = func(_ aws.Config) bedrockClient { return fake }
 	h.loadSchema = func(_, _ string) (*schema.Snapshot, error) { return nil, nil }
+	h.loadAictx = func(_, _ string) (string, error) { return "", nil }
 	return h
 }
 
@@ -204,16 +205,48 @@ func TestAIMapsDeadlineTo504(t *testing.T) {
 	}
 }
 
+func TestAIAskInjectsAictxIntoSystemPrompt(t *testing.T) {
+	fake := &fakeBedrock{askReply: "SELECT 1;"}
+	h := newTestAIHandlers(fake)
+	h.loadAictx = func(cluster, database string) (string, error) {
+		if cluster == "arn:c" && database == "app" {
+			return "active user = last_login_at within 30 days", nil
+		}
+		return "", nil
+	}
+	payload := AskRequest{
+		aiRequestBase: aiRequestBase{
+			Profile: "dev", Cluster: "arn:c", Database: "app", ModelID: "m",
+		},
+		Messages: []MessageDTO{{Role: "user", Text: "hi"}},
+	}
+	buf, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/ask", strings.NewReader(string(buf)))
+	rr := httptest.NewRecorder()
+	h.ask(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(fake.seenSystem, "User-provided context:") {
+		t.Errorf("expected user-context heading in system prompt:\n%s", fake.seenSystem)
+	}
+	if !strings.Contains(fake.seenSystem, "active user = last_login_at within 30 days") {
+		t.Errorf("expected user-context body in system prompt:\n%s", fake.seenSystem)
+	}
+}
+
 func TestAIAskTagsReadOnlyClassification(t *testing.T) {
 	cases := map[string]struct {
-		sql          string
-		wantReadOnly bool
+		sql              string
+		wantReadOnly     bool
+		wantAutoRunnable bool
 	}{
-		"select":   {"SELECT 1;", true},
-		"explain":  {"EXPLAIN ANALYZE SELECT 1;", true},
-		"insert":   {"INSERT INTO users(id) VALUES (1);", false},
-		"delete":   {"DELETE FROM users WHERE id = 1;", false},
-		"comments": {"-- comment\nSELECT 1;", true},
+		"select":                 {"SELECT 1;", true, true},
+		"explain":                {"EXPLAIN ANALYZE SELECT 1;", true, false},
+		"explain analyze delete": {"EXPLAIN ANALYZE DELETE FROM users;", true, false},
+		"insert":                 {"INSERT INTO users(id) VALUES (1);", false, false},
+		"delete":                 {"DELETE FROM users WHERE id = 1;", false, false},
+		"comments":               {"-- comment\nSELECT 1;", true, true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -236,6 +269,9 @@ func TestAIAskTagsReadOnlyClassification(t *testing.T) {
 			}
 			if body.IsReadOnly != tc.wantReadOnly {
 				t.Errorf("isReadOnly: got %v, want %v (sql=%q)", body.IsReadOnly, tc.wantReadOnly, tc.sql)
+			}
+			if body.AutoRunnable != tc.wantAutoRunnable {
+				t.Errorf("autoRunnable: got %v, want %v (sql=%q)", body.AutoRunnable, tc.wantAutoRunnable, tc.sql)
 			}
 		})
 	}

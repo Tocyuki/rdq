@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Tocyuki/rdq/internal/aictx"
 	"github.com/Tocyuki/rdq/internal/bedrock"
 	"github.com/Tocyuki/rdq/internal/runner"
 	"github.com/Tocyuki/rdq/internal/schema"
@@ -29,6 +30,7 @@ type aiHandlers struct {
 	// DI seams for tests.
 	newClient  func(cfg aws.Config) bedrockClient
 	loadSchema func(cluster, database string) (*schema.Snapshot, error)
+	loadAictx  func(cluster, database string) (string, error)
 }
 
 func newAIHandlers(cache *awsCache) *aiHandlers {
@@ -38,6 +40,7 @@ func newAIHandlers(cache *awsCache) *aiHandlers {
 			return bedrock.New(cfg)
 		},
 		loadSchema: schema.LoadCache,
+		loadAictx:  aictx.LoadContent,
 	}
 }
 
@@ -95,7 +98,7 @@ func (h *aiHandlers) ask(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadGateway, errCodeAWSError, err.Error())
 		return
 	}
-	systemPrompt := bedrock.BuildSystemPrompt(req.Database, req.Language, h.snapshotFor(req.Cluster, req.Database))
+	systemPrompt := bedrock.BuildSystemPrompt(req.Database, req.Language, h.aictxFor(req.Cluster, req.Database), h.snapshotFor(req.Cluster, req.Database))
 	messages := toBedrockMessages(req.Messages)
 
 	ctx, cancel := context.WithTimeout(r.Context(), aiTimeout)
@@ -106,7 +109,11 @@ func (h *aiHandlers) ask(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, aiStatus(err), errCodeAWSError, err.Error())
 		return
 	}
-	writeJSON(w, AskResponse{SQL: sql, IsReadOnly: runner.IsReadOnlySQL(sql)})
+	writeJSON(w, AskResponse{
+		SQL:          sql,
+		IsReadOnly:   runner.IsReadOnlySQL(sql),
+		AutoRunnable: runner.IsAutoRunnableSQL(sql),
+	})
 }
 
 // explain serves POST /api/ai/explain — analyze a SQL error.
@@ -124,7 +131,7 @@ func (h *aiHandlers) explain(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadGateway, errCodeAWSError, err.Error())
 		return
 	}
-	systemPrompt := bedrock.BuildErrorExplanationPrompt(req.Database, req.Language, h.snapshotFor(req.Cluster, req.Database))
+	systemPrompt := bedrock.BuildErrorExplanationPrompt(req.Database, req.Language, h.aictxFor(req.Cluster, req.Database), h.snapshotFor(req.Cluster, req.Database))
 	userPrompt := bedrock.BuildErrorUserPrompt(req.SQL, req.ErrorMsg)
 	messages := []bedrock.Message{{Role: bedrock.RoleUser, Text: userPrompt}}
 
@@ -157,7 +164,7 @@ func (h *aiHandlers) review(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadGateway, errCodeAWSError, err.Error())
 		return
 	}
-	systemPrompt := bedrock.BuildReviewSystemPrompt(req.Database, req.Language, h.snapshotFor(req.Cluster, req.Database))
+	systemPrompt := bedrock.BuildReviewSystemPrompt(req.Database, req.Language, h.aictxFor(req.Cluster, req.Database), h.snapshotFor(req.Cluster, req.Database))
 	userPrompt := bedrock.BuildReviewUserPrompt(req.SQL, req.Focus)
 	messages := []bedrock.Message{{Role: bedrock.RoleUser, Text: userPrompt}}
 
@@ -191,7 +198,7 @@ func (h *aiHandlers) analyze(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadGateway, errCodeAWSError, err.Error())
 		return
 	}
-	systemPrompt := bedrock.BuildAnalysisSystemPrompt(req.Database, req.Language, h.snapshotFor(req.Cluster, req.Database))
+	systemPrompt := bedrock.BuildAnalysisSystemPrompt(req.Database, req.Language, h.aictxFor(req.Cluster, req.Database), h.snapshotFor(req.Cluster, req.Database))
 	userPrompt := bedrock.BuildAnalysisUserPrompt(req.SQL, req.ResultBlob, req.Focus)
 	messages := []bedrock.Message{{Role: bedrock.RoleUser, Text: userPrompt}}
 
@@ -227,6 +234,20 @@ func (h *aiHandlers) snapshotFor(cluster, database string) *schema.Snapshot {
 		return nil
 	}
 	return snap
+}
+
+// aictxFor returns the saved user-context for (cluster, database) if one
+// exists, or "" otherwise. Errors are swallowed so a corrupt context file
+// never breaks the AI flow — same tolerance policy as the schema cache.
+func (h *aiHandlers) aictxFor(cluster, database string) string {
+	if cluster == "" || database == "" {
+		return ""
+	}
+	content, err := h.loadAictx(cluster, database)
+	if err != nil {
+		return ""
+	}
+	return content
 }
 
 // validateAIBase enforces the minimum fields every AI endpoint needs.

@@ -18,11 +18,15 @@ import (
 )
 
 // setupHistoryEnv points RDQ_HISTORY_FILE at a throw-away file and returns
-// the path so the test can assert on its contents.
+// the path so the test can assert on its contents. RDQ_AICTX_DIR is also
+// redirected to a temp dir so the ask CLI tests cannot pick up real
+// per-database context the developer might have saved on disk.
 func setupHistoryEnv(t *testing.T) string {
 	t.Helper()
-	histPath := filepath.Join(t.TempDir(), "history.jsonl")
+	dir := t.TempDir()
+	histPath := filepath.Join(dir, "history.jsonl")
 	t.Setenv("RDQ_HISTORY_FILE", histPath)
+	t.Setenv("RDQ_AICTX_DIR", filepath.Join(dir, "aictx"))
 	return histPath
 }
 

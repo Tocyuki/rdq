@@ -57,6 +57,18 @@ func IsReadOnlySQL(sql string) bool {
 	return ok
 }
 
+// IsAutoRunnableSQL is stricter than IsReadOnlySQL because it gates SQL that
+// may execute immediately after an AI response. EXPLAIN is intentionally
+// excluded here: PostgreSQL EXPLAIN ANALYZE executes the underlying statement,
+// and a broad keyword check cannot distinguish every dangerous shape safely.
+func IsAutoRunnableSQL(sql string) bool {
+	head := firstKeyword(sql)
+	if head == "EXPLAIN" {
+		return false
+	}
+	return IsReadOnlySQL(sql)
+}
+
 // firstKeyword returns the first alphabetic word in sql, uppercased, with
 // leading whitespace and SQL comments stripped. Whitespace handling uses
 // unicode.IsSpace so accidental NBSP / ideographic-space bytes pasted in

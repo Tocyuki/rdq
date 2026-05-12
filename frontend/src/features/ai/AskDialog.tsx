@@ -14,7 +14,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { useExecuteQuery } from '@/features/query/useExecuteQuery'
 import { useSession } from '@/hooks/useSession'
 import { endpoints } from '@/lib/api/endpoints'
 import type { Message } from '@/lib/api/types'
@@ -26,6 +25,7 @@ import { ModelPicker } from './ModelPicker'
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
+  onAutoRun: (sql: string) => void
 }
 
 /**
@@ -34,14 +34,13 @@ interface Props {
  * preserved while the user iterates. "Insert into editor" replaces the
  * CodeMirror buffer via the pendingEditorText slot.
  */
-export function AskDialog({ open, onOpenChange }: Props) {
+export function AskDialog({ open, onOpenChange, onAutoRun }: Props) {
   const session = useSession()
   const [model, setModel] = useState(() => session.data?.bedrockModel ?? '')
   const [language, setLanguage] = useState(() => session.data?.bedrockLanguage ?? 'Japanese')
   const [prompt, setPrompt] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
   const requestEditorText = useUIStore((s) => s.requestEditorText)
-  const execute = useExecuteQuery()
 
   const ask = useMutation({
     mutationFn: (next: Message[]) =>
@@ -75,7 +74,7 @@ export function AskDialog({ open, onOpenChange }: Props) {
       // falls through to the existing "Insert into editor" / Run flow.
       const auto =
         session.data?.autoRunReadOnly === true &&
-        res.isReadOnly &&
+        res.autoRunnable &&
         !!session.data?.profile &&
         !!session.data.cluster &&
         !!session.data.secret &&
@@ -83,13 +82,7 @@ export function AskDialog({ open, onOpenChange }: Props) {
       if (auto) {
         requestEditorText(res.sql)
         onOpenChange(false)
-        execute.mutate({
-          profile: session.data!.profile,
-          cluster: session.data!.cluster,
-          secret: session.data!.secret,
-          database: session.data!.database,
-          sql: res.sql,
-        })
+        onAutoRun(res.sql)
         toast.success('Auto-running read-only SQL…')
       }
     } catch (err) {

@@ -169,6 +169,8 @@ export interface AskResponseBody {
   sql: string
   /** Server-side runner.IsReadOnlySQL classification of the returned SQL. */
   isReadOnly: boolean
+  /** Stricter server-side gate used for immediate auto-run execution. */
+  autoRunnable: boolean
 }
 
 export interface ExplainRequestBody extends AIRequestBase {
@@ -189,6 +191,21 @@ export interface AnalyzeRequestBody extends AIRequestBase {
 
 export interface TextResponse {
   text: string
+}
+
+export interface AiContext {
+  cluster: string
+  database: string
+  content: string
+  updatedAt?: string
+  /** Server-side UTF-8 byte cap; echoed so the SPA never drifts. */
+  maxContentBytes: number
+}
+
+export interface PutAiContextBody {
+  cluster: string
+  database: string
+  content: string
 }
 
 export interface ApiErrorPayload {
