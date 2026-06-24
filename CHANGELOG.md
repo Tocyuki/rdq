@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.0.10](https://github.com/Tocyuki/rdq/compare/v0.0.9...v0.0.10) - 2026-06-24
+
+- feat(ai): per-(cluster, database) prompt context for Bedrock calls by @stdhkr in https://github.com/Tocyuki/rdq/pull/27
+- Fix Claude Opus 4.7 and 4.8 Bedrock temperature requests by @Tocyuki in https://github.com/Tocyuki/rdq/pull/32
+
 ## [v0.0.9](https://github.com/Tocyuki/rdq/compare/v0.0.8...v0.0.9) - 2026-05-11
 - feat(ai): auto-run AI-generated read-only SQL behind a settings toggle by @stdhkr in https://github.com/Tocyuki/rdq/pull/28
 - feat: publish Homebrew Cask releases by @Tocyuki in https://github.com/Tocyuki/rdq/pull/26
