@@ -179,3 +179,54 @@ func TestBuildErrorUserPromptFormatsBothFields(t *testing.T) {
 		t.Errorf("expected trimmed error section:\n%s", got)
 	}
 }
+
+func TestInferenceConfigurationForModel(t *testing.T) {
+	cases := []struct {
+		name            string
+		modelID         string
+		wantTemperature bool
+	}{
+		{
+			name:            "legacy claude keeps temperature",
+			modelID:         "anthropic.claude-3-5-sonnet-20241022-v2:0",
+			wantTemperature: true,
+		},
+		{
+			name:            "opus 4.1 keeps temperature",
+			modelID:         "us.anthropic.claude-opus-4-1-20250805-v1:0",
+			wantTemperature: true,
+		},
+		{
+			name:            "opus 4.7 omits deprecated temperature",
+			modelID:         "us.anthropic.claude-opus-4-7-20260416-v1:0",
+			wantTemperature: false,
+		},
+		{
+			name:            "opus 4.8 omits deprecated temperature",
+			modelID:         "anthropic.claude-opus-4-8-20260528-v1:0",
+			wantTemperature: false,
+		},
+		{
+			name:            "opus 4.8 arn omits deprecated temperature",
+			modelID:         "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-4-8-20260528-v1:0",
+			wantTemperature: false,
+		},
+		{
+			name:            "dot separated opus 4.8 omits deprecated temperature",
+			modelID:         "anthropic.claude-opus-4.8-20260528-v1:0",
+			wantTemperature: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := inferenceConfigurationForModel(tc.modelID)
+			if got.MaxTokens == nil || *got.MaxTokens != 2048 {
+				t.Fatalf("MaxTokens=%v, want 2048", got.MaxTokens)
+			}
+			if hasTemperature := got.Temperature != nil; hasTemperature != tc.wantTemperature {
+				t.Errorf("Temperature presence=%v, want %v", hasTemperature, tc.wantTemperature)
+			}
+		})
+	}
+}
