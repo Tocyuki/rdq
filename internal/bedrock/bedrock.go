@@ -193,11 +193,8 @@ func (c *Client) converse(ctx context.Context, modelID, systemPrompt string, mes
 		System: []rttypes.SystemContentBlock{
 			&rttypes.SystemContentBlockMemberText{Value: systemPrompt},
 		},
-		Messages: bedrockMsgs,
-		InferenceConfig: &rttypes.InferenceConfiguration{
-			MaxTokens:   aws.Int32(2048),
-			Temperature: aws.Float32(0.2),
-		},
+		Messages:        bedrockMsgs,
+		InferenceConfig: inferenceConfigurationForModel(modelID),
 	})
 	if err != nil {
 		return "", fmt.Errorf("bedrock converse: %w", err)
@@ -218,6 +215,24 @@ func (c *Client) converse(ctx context.Context, modelID, systemPrompt string, mes
 		}
 	}
 	return sb.String(), nil
+}
+
+func inferenceConfigurationForModel(modelID string) *rttypes.InferenceConfiguration {
+	cfg := &rttypes.InferenceConfiguration{
+		MaxTokens: aws.Int32(2048),
+	}
+	if supportsTemperature(modelID) {
+		cfg.Temperature = aws.Float32(0.2)
+	}
+	return cfg
+}
+
+func supportsTemperature(modelID string) bool {
+	id := strings.ToLower(modelID)
+	return !strings.Contains(id, "claude-opus-4-7") &&
+		!strings.Contains(id, "claude-opus-4.7") &&
+		!strings.Contains(id, "claude-opus-4-8") &&
+		!strings.Contains(id, "claude-opus-4.8")
 }
 
 // stripCodeFence removes a leading and trailing markdown code fence so that
