@@ -54,16 +54,24 @@ export function SqlEditorPage() {
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null)
   const resultPanelRef = useRef<ResultPanelHandle>(null)
 
-  // Cmd/Ctrl+F: route to the result panel, but leave CodeMirror's own
-  // search panel alone when the editor has focus.
+  // Cmd/Ctrl+F routes to the result panel. Ctrl+G opens Ask from the
+  // workspace so the current SQL can be revised without leaving /sql.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const isFind = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f'
-      if (!isFind) return
+      const isAsk = e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'g'
+      if (!isFind && !isAsk) return
       const target = e.target as HTMLElement | null
-      if (target?.closest('.cm-editor')) return
       const tag = target?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      const isTextInput = tag === 'INPUT' || tag === 'TEXTAREA'
+      if (isAsk) {
+        if (isTextInput) return
+        e.preventDefault()
+        setAskOpen(true)
+        return
+      }
+      if (target?.closest('.cm-editor')) return
+      if (isTextInput) return
       e.preventDefault()
       resultPanelRef.current?.openSearch()
     }
@@ -136,12 +144,12 @@ export function SqlEditorPage() {
               <div>
                 <h1 className="text-sm font-semibold tracking-tight">SQL Editor</h1>
                 <p className="text-xs text-muted-foreground">
-                  Cmd / Ctrl + Enter to run · selection, if any, runs alone
+                  Cmd / Ctrl + Enter to run · Ctrl + G to edit with AI · selection runs alone
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <Button size="sm" variant="outline" onClick={() => setAskOpen(true)}>
-                  <Sparkles /> Ask
+                  <Sparkles /> Edit with AI
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => setReviewOpen(true)}>
                   <ShieldCheck /> Review

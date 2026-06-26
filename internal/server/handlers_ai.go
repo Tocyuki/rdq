@@ -99,7 +99,7 @@ func (h *aiHandlers) ask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	systemPrompt := bedrock.BuildSystemPrompt(req.Database, req.Language, h.aictxFor(req.Cluster, req.Database), h.snapshotFor(req.Cluster, req.Database))
-	messages := toBedrockMessages(req.Messages)
+	messages := toBedrockMessages(withCurrentSQLContext(req.Messages, req.CurrentSQL))
 
 	ctx, cancel := context.WithTimeout(r.Context(), aiTimeout)
 	defer cancel()
@@ -114,6 +114,20 @@ func (h *aiHandlers) ask(w http.ResponseWriter, r *http.Request) {
 		IsReadOnly:   runner.IsReadOnlySQL(sql),
 		AutoRunnable: runner.IsAutoRunnableSQL(sql),
 	})
+}
+
+func withCurrentSQLContext(messages []MessageDTO, currentSQL string) []MessageDTO {
+	if currentSQL == "" || len(messages) == 0 {
+		return messages
+	}
+	out := append([]MessageDTO(nil), messages...)
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i].Role == string(bedrock.RoleUser) {
+			out[i].Text = bedrock.BuildAskUserPrompt(currentSQL, out[i].Text)
+			return out
+		}
+	}
+	return out
 }
 
 // explain serves POST /api/ai/explain — analyze a SQL error.

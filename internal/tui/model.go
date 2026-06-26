@@ -28,6 +28,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // yankWindow is the maximum interval between two y presses for them to
@@ -165,6 +166,7 @@ type Model struct {
 	languagePickerOpen bool
 	pendingAsk         bool
 	pendingExplain     bool
+	pendingAskPrompt   string
 	// askChat is the running multi-turn conversation history for Ask AI
 	// within this TUI session. Each Ctrl+G round trip appends the user
 	// prompt and the assistant's reply, so successive prompts inherit
@@ -1361,7 +1363,8 @@ func (m *Model) layout() {
 	m.helpModel.Width = m.width
 
 	// History and model pickers take over the whole window minus status +
-	// help. The askInput needs only the inner width.
+	// help. The askInput is rendered inside a centered dialog, so keep it
+	// narrower than the main editor.
 	pickerH := m.height - statusH - helpH - 2
 	if pickerH < 6 {
 		pickerH = 6
@@ -1374,7 +1377,7 @@ func (m *Model) layout() {
 	m.profileList.SetSize(m.width, pickerH)
 	m.databaseList.SetSize(m.width, pickerH)
 	m.productionList.SetSize(m.width, pickerH)
-	m.askInput.SetWidth(innerW)
+	m.askInput.SetWidth(m.askInputWidth())
 }
 
 // refreshTable rebuilds the bubbles table model from the latest queryResult
@@ -1633,26 +1636,19 @@ func (m Model) View() string {
 
 	if m.askOpen {
 		// While the natural-language input is open the global keymap is
-		// inert (only Enter/Esc are routed). Replace the help bar with a
-		// minimal hint so users aren't tempted to press shortcuts that
-		// would silently no-op.
-		askBox := editorBoxFocused.Render(m.askInput.View())
-		var hint string
-		switch m.askKind {
-		case askKindReview:
-			hint = "enter to review (empty = general) · alt+enter / ctrl+j for newline · esc to cancel"
-		case askKindAnalyze:
-			hint = "enter to analyze (empty = overview) · alt+enter / ctrl+j for newline · esc to cancel"
-		default:
-			hint = "enter to ask · alt+enter / ctrl+j for newline · esc to cancel"
-		}
-		askHelp := helpBarStyle.Render(hint)
-		return strings.Join([]string{
+		// inert (only Enter/Esc are routed). Keep the normal SQL/results
+		// screen visible and compose the ask dialog into the rendered
+		// lines, so opening Ctrl+G does not visually throw away the
+		// user's current workspace.
+		dialog := m.renderAskDialog()
+		base := strings.Join([]string{
 			status,
-			askBox,
+			m.renderEditor(),
 			m.renderResults(),
-			askHelp,
+			m.renderFooter(),
+			helpBarStyle.Render(m.askHint()),
 		}, "\n")
+		return overlayAtCenter(base, dialog, m.width, m.height)
 	}
 
 	if m.aictxOpen {
@@ -1771,6 +1767,116 @@ func (m Model) renderEditor() string {
 		return editorBoxFocused.Render(m.editor.View())
 	}
 	return editorBoxStyle.Render(m.editor.View())
+}
+
+func (m Model) renderAskDialog() string {
+	title := "Edit SQL with AI"
+	switch m.askKind {
+	case askKindReview:
+		title = "Review SQL with AI"
+	case askKindAnalyze:
+		title = "Analyze Result with AI"
+	}
+	parts := []string{
+		statusKeyStyle.Render(title),
+	}
+	if m.askKind == askKindGenerate {
+		parts = append(parts, m.renderAskCurrentSQLPreview())
+	}
+	parts = append(parts, editorBoxFocused.Render(m.askInput.View()))
+	return dialogBoxStyle.Width(m.askDialogWidth()).Render(strings.Join(parts, "\n\n"))
+}
+
+func overlayAtCenter(base, overlay string, width, height int) string {
+	if width <= 0 || height <= 0 || overlay == "" {
+		return base
+	}
+	overlayW := lipgloss.Width(overlay)
+	overlayH := lipgloss.Height(overlay)
+	x := (width - overlayW) / 2
+	y := (height - overlayH) / 2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+
+	baseLines := strings.Split(base, "\n")
+	overlayLines := strings.Split(overlay, "\n")
+	for len(baseLines) < y+len(overlayLines) {
+		baseLines = append(baseLines, "")
+	}
+	for i, line := range overlayLines {
+		row := y + i
+		if row >= height {
+			break
+		}
+		baseLines[row] = overlayLine(baseLines[row], line, x)
+	}
+	return strings.Join(baseLines, "\n")
+}
+
+func overlayLine(baseLine, overlayLine string, x int) string {
+	left := ansi.Truncate(baseLine, x, "")
+	if pad := x - ansi.StringWidth(left); pad > 0 {
+		left += strings.Repeat(" ", pad)
+	}
+
+	overlayW := ansi.StringWidth(overlayLine)
+	rightStart := x + overlayW
+	var right string
+	if ansi.StringWidth(baseLine) > rightStart {
+		right = ansi.TruncateLeft(baseLine, rightStart, "")
+	}
+	return left + overlayLine + right
+}
+
+func (m Model) askHint() string {
+	switch m.askKind {
+	case askKindReview:
+		return "enter to review (empty = general) · alt+enter / ctrl+j for newline · esc to cancel"
+	case askKindAnalyze:
+		return "enter to analyze (empty = overview) · alt+enter / ctrl+j for newline · esc to cancel"
+	default:
+		return "enter to generate/replace SQL · alt+enter / ctrl+j for newline · esc to cancel"
+	}
+}
+
+func (m Model) renderAskCurrentSQLPreview() string {
+	sql := strings.TrimSpace(m.editor.Value())
+	if sql == "" {
+		return helpStyle.Render("Current SQL: empty - Ctrl+G will generate a new statement")
+	}
+	preview := strings.Join(strings.Fields(sql), " ")
+	if w := m.askInputWidth() - 13; w > 20 {
+		preview = runner.Truncate(preview, w)
+	}
+	return helpStyle.Render("Current SQL: " + preview)
+}
+
+func (m Model) askDialogWidth() int {
+	w := m.width - 8
+	if w > 88 {
+		w = 88
+	}
+	if w < 44 {
+		w = m.width - 2
+	}
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
+func (m Model) askInputWidth() int {
+	// dialogBoxStyle adds two columns of border and four columns of
+	// horizontal padding. Keep the textarea inside that framed area.
+	w := m.askDialogWidth() - 6
+	if w < 20 {
+		w = 20
+	}
+	return w
 }
 
 func (m Model) renderResults() string {
@@ -2667,16 +2773,13 @@ func (m *Model) startExplain() tea.Cmd {
 	return tea.Batch(m.spin.Tick, explainCmd(m.bedrockClient, m.bedrockModel, systemPrompt, conv))
 }
 
-// startAsk is the entry point for the Ctrl+G shortcut. When no model is
-// cached yet it kicks off the picker and remembers to chain into the ask
-// input afterwards. Otherwise it opens the ask input directly.
+// startAsk is the entry point for the Ctrl+G shortcut. It always opens the
+// natural-language input first; if the user submits before choosing a model,
+// the submit path will open the model picker and resume with the typed prompt.
 func (m *Model) startAsk() tea.Cmd {
 	if m.bedrockClient == nil {
 		m.lastErr = fmt.Errorf("bedrock client is not configured")
 		return nil
-	}
-	if m.bedrockModel == "" {
-		return m.openModelPicker(true)
 	}
 	return m.openAskInput()
 }
@@ -2701,7 +2804,11 @@ func (m *Model) openModelPicker(pendingAsk bool) tea.Cmd {
 // keyboard focus.
 func (m *Model) openAskInput() tea.Cmd {
 	m.askInput.SetValue("")
-	m.askInput.Placeholder = "Ask in natural language (e.g. \"top 10 active users this week\")"
+	if strings.TrimSpace(m.editor.Value()) == "" {
+		m.askInput.Placeholder = "Ask in natural language (e.g. \"top 10 active users this week\")"
+	} else {
+		m.askInput.Placeholder = "Describe how to change or rewrite the current SQL"
+	}
 	m.askKind = askKindGenerate
 	return m.focusAskInput()
 }
@@ -2790,6 +2897,24 @@ func (m *Model) submitAskInput() tea.Cmd {
 	if m.askExecuting {
 		return nil
 	}
+	if m.bedrockModel == "" {
+		m.pendingAskPrompt = prompt
+		m.askOpen = false
+		m.askInput.Blur()
+		return m.openModelPicker(true)
+	}
+	return m.startAskPrompt(prompt)
+}
+
+func (m *Model) startAskPrompt(prompt string) tea.Cmd {
+	if m.bedrockClient == nil {
+		m.lastErr = fmt.Errorf("bedrock client is not configured")
+		return nil
+	}
+	if m.bedrockModel == "" {
+		m.pendingAskPrompt = prompt
+		return m.openModelPicker(true)
+	}
 	m.askExecuting = true
 	m.askOpen = false
 	m.askInput.Blur()
@@ -2797,8 +2922,22 @@ func (m *Model) submitAskInput() tea.Cmd {
 	m.askChat = append(m.askChat, bedrock.Message{Role: bedrock.RoleUser, Text: prompt})
 	// Defensive copy so the goroutine can't observe a slice that the
 	// askResultMsg handler is about to mutate.
-	conv := append([]bedrock.Message(nil), m.askChat...)
+	conv := askConversationWithCurrentSQL(m.askChat, m.editor.Value(), prompt)
 	return tea.Batch(m.spin.Tick, askCmd(m.bedrockClient, m.bedrockModel, systemPrompt, conv, prompt))
+}
+
+func askConversationWithCurrentSQL(messages []bedrock.Message, currentSQL, prompt string) []bedrock.Message {
+	conv := append([]bedrock.Message(nil), messages...)
+	if len(conv) == 0 || strings.TrimSpace(currentSQL) == "" {
+		return conv
+	}
+	for i := len(conv) - 1; i >= 0; i-- {
+		if conv[i].Role == bedrock.RoleUser {
+			conv[i].Text = bedrock.BuildAskUserPrompt(currentSQL, prompt)
+			return conv
+		}
+	}
+	return conv
 }
 
 // openAictxInput reveals the AI-context editor seeded with the currently
@@ -2873,6 +3012,7 @@ func (m *Model) updateModelPicker(msg tea.KeyMsg) tea.Cmd {
 		m.modelPickerOpen = false
 		m.pendingAsk = false
 		m.pendingExplain = false
+		m.pendingAskPrompt = ""
 		return nil
 	}
 	drivePicker(&m.modelList, msg)
@@ -3379,6 +3519,11 @@ func (m *Model) persistTarget() error {
 func (m *Model) continuePending(modelName string) tea.Cmd {
 	if m.pendingAsk {
 		m.pendingAsk = false
+		if m.pendingAskPrompt != "" {
+			prompt := m.pendingAskPrompt
+			m.pendingAskPrompt = ""
+			return m.startAskPrompt(prompt)
+		}
 		return m.openAskInput()
 	}
 	if m.pendingExplain {
@@ -3421,6 +3566,7 @@ func (m *Model) updateLanguagePicker(msg tea.KeyMsg) tea.Cmd {
 		m.languagePickerOpen = false
 		m.pendingAsk = false
 		m.pendingExplain = false
+		m.pendingAskPrompt = ""
 		return nil
 	}
 	drivePicker(&m.languageList, msg)

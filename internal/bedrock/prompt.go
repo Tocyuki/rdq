@@ -11,7 +11,7 @@ import (
 // for the AWS RDS Data API. The reply is pasted directly into the editor, so
 // the wording is strict about output format: either runnable SQL or pure
 // SQL-comment explanation, never a mix.
-const sqlAssistantPrompt = `You are a SQL assistant for AWS Aurora accessed via the RDS Data API. Your single job is to translate a natural-language request into one runnable SQL statement against the schema below.
+const sqlAssistantPrompt = `You are a SQL assistant for AWS Aurora accessed via the RDS Data API. Your single job is to create, modify, or rewrite one runnable SQL statement from the user's natural-language request and the optional current SQL against the schema below.
 
 OUTPUT FORMAT (strict)
 
@@ -36,6 +36,24 @@ The user will paste your reply directly into a SQL editor, so the output must al
    - Cover any of these cases: the request references tables or columns that are not in the schema; the request is not a database operation; the request requires information you cannot infer (date ranges, ID values, business rules); the request asks for something the RDS Data API does not support (DDL across schemas, multi-statement transactions, server-side functions you can't see, etc.); the request is ambiguous in a way that picking a default would be misleading.
 
 Always honour the language directive below for any natural-language text inside SQL comments.`
+
+// BuildAskUserPrompt formats the latest natural-language request for Ask. If
+// currentSQL is present, the model should treat it as the editor buffer to
+// revise or replace; otherwise it should create the query from scratch.
+func BuildAskUserPrompt(currentSQL, request string) string {
+	request = strings.TrimSpace(request)
+	currentSQL = strings.TrimSpace(currentSQL)
+	if currentSQL == "" {
+		return request
+	}
+	var b strings.Builder
+	b.WriteString("Current SQL:\n")
+	b.WriteString(currentSQL)
+	b.WriteString("\n\nRequest:\n")
+	b.WriteString(request)
+	b.WriteString("\n\nRevise or rewrite the current SQL to satisfy the request. Output only the resulting SQL.")
+	return b.String()
+}
 
 // BuildSystemPrompt assembles the system message sent to Bedrock. The
 // database name and schema listing come from the live cluster so the model
