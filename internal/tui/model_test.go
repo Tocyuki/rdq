@@ -421,6 +421,136 @@ func TestAskChatAccumulatesHistory(t *testing.T) {
 	}
 }
 
+func TestCtrlGOpensAskInputBeforeModelPicker(t *testing.T) {
+	bd := &bedrock.Client{}
+	m := newModel(nil, target{}, nil, bd, "", "Japanese", aws.Config{})
+	m.width, m.height = 100, 40
+	m.layout()
+
+	tm, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	m = tm.(Model)
+
+	if !m.askOpen {
+		t.Fatalf("Ctrl+G should open the natural-language ask input")
+	}
+	if m.modelPickerOpen {
+		t.Fatalf("Ctrl+G should not open the model picker before the user enters a prompt")
+	}
+}
+
+func TestAskInputRendersAsDialog(t *testing.T) {
+	bd := &bedrock.Client{}
+	m := newModel(nil, target{}, nil, bd, "claude", "Japanese", aws.Config{})
+	m.width, m.height = 100, 40
+	m.layout()
+
+	tm, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	m = tm.(Model)
+
+	out := m.View()
+	if !contains(out, "Edit SQL with AI") {
+		t.Fatalf("ask dialog title missing:\n%s", out)
+	}
+	if !contains(out, "Current SQL: empty") {
+		t.Fatalf("ask dialog should show current SQL context:\n%s", out)
+	}
+	if !contains(out, "Type SQL here") {
+		t.Fatalf("ask dialog should preserve the background editor pane:\n%s", out)
+	}
+	if !contains(out, "Ask in natural language") {
+		t.Fatalf("ask dialog textarea input is missing:\n%s", out)
+	}
+}
+
+func TestOverlayAtCenterComposesWithoutCursorMovement(t *testing.T) {
+	base := strings.Join([]string{
+		"01234567890123456789",
+		"abcdefghijklmnopqrst",
+		"ABCDEFGHIJKLMNOPQRST",
+	}, "\n")
+
+	out := overlayAtCenter(base, "POP", 20, 3)
+	if contains(out, "\x1b[2;9H") {
+		t.Fatalf("overlay should be composed into lines, not appended with cursor movement: %q", out)
+	}
+
+	lines := strings.Split(out, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("line count = %d, want 3: %q", len(lines), out)
+	}
+	if lines[0] != "01234567890123456789" || lines[2] != "ABCDEFGHIJKLMNOPQRST" {
+		t.Fatalf("overlay should preserve untouched rows: %q", out)
+	}
+	if lines[1] != "abcdefghPOPlmnopqrst" {
+		t.Fatalf("overlay row = %q, want %q", lines[1], "abcdefghPOPlmnopqrst")
+	}
+}
+
+func TestAskSubmitWithoutModelPreservesPromptThroughPicker(t *testing.T) {
+	bd := &bedrock.Client{}
+	m := newModel(nil, target{}, nil, bd, "", "Japanese", aws.Config{})
+	m.width, m.height = 100, 40
+	m.layout()
+	m.askOpen = true
+	m.askKind = askKindGenerate
+	m.askInput.SetValue("active users")
+
+	tm, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = tm.(Model)
+
+	if m.askOpen {
+		t.Fatalf("ask input should close while the model picker is open")
+	}
+	if !m.modelPickerOpen || !m.pendingAsk {
+		t.Fatalf("submit without a model should open the model picker with pendingAsk=true")
+	}
+	if m.pendingAskPrompt != "active users" {
+		t.Fatalf("pendingAskPrompt = %q, want active users", m.pendingAskPrompt)
+	}
+
+	m.bedrockModel = "claude"
+	cmd := m.continuePending("Claude")
+	if cmd == nil {
+		t.Fatalf("continuePending should dispatch the preserved prompt")
+	}
+	if m.pendingAskPrompt != "" || m.pendingAsk {
+		t.Fatalf("pending ask state should be cleared after dispatch")
+	}
+	if !m.askExecuting {
+		t.Fatalf("preserved prompt should start Ask execution")
+	}
+	if got := m.askChat[len(m.askChat)-1].Text; got != "active users" {
+		t.Fatalf("askChat prompt = %q, want active users", got)
+	}
+}
+
+func TestAskConversationWithCurrentSQLKeepsVisibleChatClean(t *testing.T) {
+	chat := []bedrock.Message{
+		{Role: bedrock.RoleUser, Text: "list users"},
+		{Role: bedrock.RoleAssistant, Text: "SELECT id FROM users;"},
+		{Role: bedrock.RoleUser, Text: "active users with email too"},
+	}
+
+	conv := askConversationWithCurrentSQL(chat, "SELECT id FROM users;", "active users with email too")
+
+	if len(conv) != len(chat) {
+		t.Fatalf("conversation length = %d, want %d", len(conv), len(chat))
+	}
+	if chat[2].Text != "active users with email too" {
+		t.Fatalf("source chat was mutated: %q", chat[2].Text)
+	}
+	if conv[0].Text != "list users" {
+		t.Errorf("previous user turn changed: %q", conv[0].Text)
+	}
+	latest := conv[2].Text
+	if !strings.Contains(latest, "Current SQL:\nSELECT id FROM users;") {
+		t.Errorf("latest message missing current SQL:\n%s", latest)
+	}
+	if !strings.Contains(latest, "Request:\nactive users with email too") {
+		t.Errorf("latest message missing request:\n%s", latest)
+	}
+}
+
 // TestAskChatRollbackOnError ensures that a failed ask call does not leave
 // a dangling user message in the chat history; otherwise the next retry
 // would send a duplicate of the prompt to the model.

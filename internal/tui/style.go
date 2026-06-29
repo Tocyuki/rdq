@@ -50,6 +50,11 @@ var (
 	resultBoxFocused = resultBoxStyle.
 				BorderForeground(colorAccent)
 
+	dialogBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorAccent).
+			Padding(1, 2)
+
 	errorStyle = lipgloss.NewStyle().
 			Foreground(colorError).
 			Bold(true).

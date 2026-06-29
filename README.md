@@ -35,7 +35,7 @@ The `gui` subcommand exposes a browser-based SQL client (React + Vite SPA embedd
 
 ### AI integration (Amazon Bedrock)
 
-- **Ask AI** (`^G`) — natural-language prompt → SQL **replaces** the editor contents. Multi-turn chat history is preserved within a session, so follow-ups like "now sort by created_at desc" inherit context. The chat resets when you switch cluster or profile (the previous schema no longer applies). Failed prompts are automatically removed from the history so retries do not duplicate turns
+- **Ask AI** (`^G`) — opens an in-place natural-language popup. If the editor already has SQL, the model revises or rewrites that SQL; if it is empty, the model creates a query from scratch. The generated SQL **replaces** the editor contents. Multi-turn chat history is preserved within a session, so follow-ups like "now sort by created_at desc" inherit context. The chat resets when you switch cluster or profile (the previous schema no longer applies). Failed prompts are automatically removed from the history so retries do not duplicate turns
 - **F6 = unified review / analyze / explain** — picks the right action based on focus + screen state:
   - Editor focus + non-empty SQL → **review the SQL** (correctness / performance / safety / style)
   - Results focus + result rows → **analyze the result** (counts, distributions, outliers)
@@ -249,7 +249,7 @@ The exit-code table above (`exec` subcommand) applies to `ask` as well:
 | `Tab` | Move focus between editor and results pane |
 | `^J` | Toggle table / JSON view |
 | `Enter` | Open row inspector (in table view) / close inspector |
-| `^G` | Ask AI — open natural-language prompt input (always SQL generation) |
+| `^G` | Ask AI — edit/rewrite the current SQL, or generate one from scratch |
 | `F6` | Review / analyze / explain — picks the right one from current focus + state |
 | `^P` | Switch AWS profile |
 | `^T` | Switch cluster |
@@ -304,12 +304,13 @@ All pickers (profile / cluster / secret / model / language / history) support **
 
 ### AI workflow examples
 
-**Generate SQL from natural language**:
+**Edit or generate SQL from natural language**:
 
 1. Press `^G` from the editor → enter a natural-language prompt → `Enter`
-2. The generated SQL **replaces** the editor contents (the previous draft is preserved in `^H` history if you ran it)
-3. Review and press `F5` to execute
-4. Press `^G` again to refine: "now group by month and sort desc" — the model sees the previous turn
+2. If the editor already has SQL, the model revises or rewrites it; otherwise it creates SQL from scratch
+3. The generated SQL **replaces** the editor contents (the previous draft is preserved in `^H` history if you ran it)
+4. Review and press `F5` to execute
+5. Press `^G` again to refine: "now group by month and sort desc" — the model sees the current SQL and previous turns
 
 **Review the SQL you just wrote**:
 

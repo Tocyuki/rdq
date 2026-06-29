@@ -196,10 +196,12 @@ type aiRequestBase struct {
 
 // AskRequest is the JSON body of POST /api/ai/ask. Messages is the full
 // multi-turn history (SPA-managed); the server does not keep conversation
-// state.
+// state. CurrentSQL is the editor buffer at submit time so Ask can revise
+// or rewrite it instead of always starting from a blank query.
 type AskRequest struct {
 	aiRequestBase
-	Messages []MessageDTO `json:"messages"`
+	Messages   []MessageDTO `json:"messages"`
+	CurrentSQL string       `json:"currentSql,omitempty"`
 }
 
 // AskResponse is the JSON body of POST /api/ai/ask. The SQL has already

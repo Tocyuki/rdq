@@ -163,6 +163,7 @@ interface AIRequestBase {
 
 export interface AskRequestBody extends AIRequestBase {
   messages: Message[]
+  currentSql?: string
 }
 
 export interface AskResponseBody {

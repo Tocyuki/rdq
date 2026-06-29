@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Clipboard, Copy, Eraser, Send, Sparkles } from 'lucide-react'
 import { useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
@@ -14,6 +15,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Textarea } from '@/components/ui/textarea'
 import { useSession } from '@/hooks/useSession'
 import { endpoints } from '@/lib/api/endpoints'
 import type { Message } from '@/lib/api/types'
@@ -31,8 +33,9 @@ interface Props {
 /**
  * AskDialog turns natural language into SQL via /api/ai/ask. The
  * conversation is local to the dialog session so multi-turn context is
- * preserved while the user iterates. "Insert into editor" replaces the
- * CodeMirror buffer via the pendingEditorText slot.
+ * preserved while the user iterates. The current editor SQL is sent with
+ * each prompt so the model can revise or rewrite it instead of always
+ * starting from a blank query.
  */
 export function AskDialog({ open, onOpenChange, onAutoRun }: Props) {
   const session = useSession()
@@ -40,7 +43,16 @@ export function AskDialog({ open, onOpenChange, onAutoRun }: Props) {
   const [language, setLanguage] = useState(() => session.data?.bedrockLanguage ?? 'Japanese')
   const [prompt, setPrompt] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
+  const sql = useUIStore((s) => s.sql)
   const requestEditorText = useUIStore((s) => s.requestEditorText)
+  const promptRef = useRef<HTMLTextAreaElement>(null)
+  const currentSql = sql.trim()
+
+  useEffect(() => {
+    if (open) {
+      window.setTimeout(() => promptRef.current?.focus(), 0)
+    }
+  }, [open])
 
   const ask = useMutation({
     mutationFn: (next: Message[]) =>
@@ -50,6 +62,7 @@ export function AskDialog({ open, onOpenChange, onAutoRun }: Props) {
         database: session.data?.database ?? '',
         modelId: model,
         language,
+        currentSql: sql,
         messages: next,
       }),
   })
@@ -92,11 +105,13 @@ export function AskDialog({ open, onOpenChange, onAutoRun }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Ask AI</DialogTitle>
+          <DialogTitle>Edit SQL with AI</DialogTitle>
           <DialogDescription>
-            Describe what you want to query; the model returns SQL you can insert into the editor.
+            {currentSql
+              ? 'Describe the change you want. The generated SQL will replace the current editor buffer.'
+              : 'Describe the query you want. The generated SQL will be inserted into the empty editor.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -111,9 +126,16 @@ export function AskDialog({ open, onOpenChange, onAutoRun }: Props) {
           </div>
         </div>
 
-        <ScrollArea className="max-h-[35vh] rounded-md border border-border bg-muted/30 p-3">
+        <div className="space-y-1">
+          <Label>{currentSql ? 'Current SQL' : 'Current SQL is empty'}</Label>
+          <pre className="max-h-28 overflow-auto rounded-md border border-border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
+            {currentSql || 'New SQL will be generated from your request.'}
+          </pre>
+        </div>
+
+        <ScrollArea className="max-h-[26vh] rounded-md border border-border bg-muted/30 p-3">
           {messages.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No turns yet — type a request below.</p>
+            <p className="text-xs text-muted-foreground">No turns yet. Type a request below.</p>
           ) : (
             messages.map((m, i) => (
               <div key={i} className="mb-3">
@@ -132,17 +154,22 @@ export function AskDialog({ open, onOpenChange, onAutoRun }: Props) {
                       variant="outline"
                       onClick={() => {
                         requestEditorText(m.text)
-                        toast.success('Inserted into editor')
+                        toast.success('SQL editor updated')
                         onOpenChange(false)
                       }}
                     >
-                      Insert into editor
+                      <Clipboard />
+                      Replace SQL
                     </Button>
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => navigator.clipboard.writeText(m.text)}
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(m.text)
+                        toast.success('SQL copied to clipboard')
+                      }}
                     >
+                      <Copy />
                       Copy
                     </Button>
                   </div>
@@ -153,8 +180,10 @@ export function AskDialog({ open, onOpenChange, onAutoRun }: Props) {
         </ScrollArea>
 
         <div className="space-y-1">
-          <Label>Your question</Label>
-          <Input
+          <Label>Request</Label>
+          <Textarea
+            ref={promptRef}
+            className="min-h-24 resize-none"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
@@ -163,17 +192,32 @@ export function AskDialog({ open, onOpenChange, onAutoRun }: Props) {
                 onSubmit()
               }
             }}
-            placeholder="Find the top 10 customers by revenue this month"
+            placeholder={
+              currentSql
+                ? 'Add a filter for active users and sort by created_at descending'
+                : 'Find the top 10 customers by revenue this month'
+            }
           />
           <p className="text-[10px] text-muted-foreground">Cmd / Ctrl + Enter to send</p>
         </div>
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => setMessages([])} disabled={ask.isPending}>
+            <Eraser />
             Clear
           </Button>
           <Button onClick={onSubmit} disabled={ask.isPending}>
-            {ask.isPending ? 'Asking…' : 'Ask'}
+            {ask.isPending ? (
+              <>
+                <Sparkles />
+                Generating…
+              </>
+            ) : (
+              <>
+                <Send />
+                Generate SQL
+              </>
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

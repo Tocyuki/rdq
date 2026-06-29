@@ -111,6 +111,42 @@ func TestAIAskPassesSystemPromptAndMessages(t *testing.T) {
 	}
 }
 
+func TestAIAskIncludesCurrentSQLInLatestUserMessage(t *testing.T) {
+	fake := &fakeBedrock{askReply: "SELECT id, email FROM users WHERE active = true;"}
+	h := newTestAIHandlers(fake)
+	payload := AskRequest{
+		aiRequestBase: aiRequestBase{
+			Profile: "dev", Cluster: "arn:c", Database: "app", ModelID: "m", Language: "Japanese",
+		},
+		CurrentSQL: "SELECT id FROM users;",
+		Messages: []MessageDTO{
+			{Role: "user", Text: "users"},
+			{Role: "assistant", Text: "SELECT id FROM users;"},
+			{Role: "user", Text: "active users with email too"},
+		},
+	}
+	buf, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/ask", strings.NewReader(string(buf)))
+	rr := httptest.NewRecorder()
+	h.ask(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if len(fake.seenMessages) != 3 {
+		t.Fatalf("messages = %+v", fake.seenMessages)
+	}
+	if fake.seenMessages[0].Text != "users" {
+		t.Errorf("previous user turn changed: %q", fake.seenMessages[0].Text)
+	}
+	latest := fake.seenMessages[2].Text
+	if !strings.Contains(latest, "Current SQL:\nSELECT id FROM users;") {
+		t.Errorf("latest message missing current SQL:\n%s", latest)
+	}
+	if !strings.Contains(latest, "Request:\nactive users with email too") {
+		t.Errorf("latest message missing request:\n%s", latest)
+	}
+}
+
 func TestAIAskRequiresNonEmptyMessages(t *testing.T) {
 	h := newTestAIHandlers(&fakeBedrock{})
 	payload := AskRequest{aiRequestBase: aiRequestBase{Profile: "dev", Database: "app", ModelID: "m"}}

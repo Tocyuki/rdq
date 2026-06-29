@@ -50,7 +50,7 @@ func defaultKeyMap() keyMap {
 		),
 		Ask: key.NewBinding(
 			key.WithKeys("ctrl+g"),
-			key.WithHelp("^G", "ask AI (generate SQL)"),
+			key.WithHelp("^G", "edit SQL with AI"),
 		),
 		Assist: key.NewBinding(
 			key.WithKeys("f6"),
