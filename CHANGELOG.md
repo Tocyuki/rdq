@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.0.11](https://github.com/Tocyuki/rdq/compare/v0.0.10...v0.0.11) - 2026-06-29
+
+- Edit current SQL from Ask AI popup by @Tocyuki in https://github.com/Tocyuki/rdq/pull/33
+
 ## [v0.0.10](https://github.com/Tocyuki/rdq/compare/v0.0.9...v0.0.10) - 2026-06-24
 
 - feat(ai): per-(cluster, database) prompt context for Bedrock calls by @stdhkr in https://github.com/Tocyuki/rdq/pull/27
