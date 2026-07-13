@@ -94,6 +94,7 @@ brew install --cask Tocyuki/tap/rdq
 ```
 
 The Homebrew Cask installs the prebuilt release binary, which includes the embedded frontend bundle used by `rdq gui`.
+The release pipeline signs and notarizes macOS binaries so Gatekeeper can verify Cask installs.
 
 ### `go install`
 
