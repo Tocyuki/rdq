@@ -87,6 +87,7 @@ export interface ExecuteRequestBody {
 export interface ExecuteResponseBody {
   columns: string[]
   rows: unknown[][]
+  /** Rows affected by a write; -1 for result-set (SELECT) responses. */
   updated: number
   durationMs: number
   // See ExecuteResponse.NeedsConfirmation in internal/server/types.go.

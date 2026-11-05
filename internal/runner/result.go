@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata/types"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Result is a UI-friendly view of an RDS Data API ExecuteStatement response.
@@ -63,6 +64,14 @@ func ConvertResult(out *rdsdata.ExecuteStatementOutput) *Result {
 		return &Result{}
 	}
 	res := &Result{Updated: out.NumberOfRecordsUpdated}
+	// The Data API reports NumberOfRecordsUpdated=0 for SELECTs, which is
+	// indistinguishable from a write that touched no rows. A response that
+	// carries column metadata is result-set shaped, so mark it "not
+	// applicable" per the Updated contract. (INSERT ... RETURNING also lands
+	// here; its row count is still visible via len(Rows).)
+	if len(out.ColumnMetadata) > 0 {
+		res.Updated = -1
+	}
 
 	for _, col := range out.ColumnMetadata {
 		res.Columns = append(res.Columns, aws.ToString(col.Name))
@@ -216,27 +225,25 @@ func ColumnWidths(columns []string, rows [][]any) []int {
 	return widths
 }
 
-// DisplayWidth approximates the visible width of a cell. We deliberately use
-// rune count rather than wcwidth because the input is already free of escape
-// sequences and the table width only needs to be roughly accurate.
+// DisplayWidth returns the number of terminal cells s occupies. East Asian
+// wide characters and most emoji take two cells, so counting runes would
+// under-measure Japanese / Chinese / Korean data and misalign table columns
+// (bubbles/table measures cells the same way).
 func DisplayWidth(s string) int {
-	return len([]rune(s))
+	return ansi.StringWidth(s)
 }
 
 // Truncate shortens s to at most width display cells, appending an ellipsis
-// when content was dropped.
+// when content was dropped. Wide characters are never split, so the result
+// may be one cell narrower than width.
 func Truncate(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	runes := []rune(s)
-	if len(runes) <= width {
+	if DisplayWidth(s) <= width {
 		return s
 	}
-	if width == 1 {
-		return "…"
-	}
-	return string(runes[:width-1]) + "…"
+	return ansi.Truncate(s, width, "…")
 }
 
 // RowJSON renders a single row as a pretty-printed JSON object with the

@@ -127,6 +127,33 @@ func TestConvertResult(t *testing.T) {
 	}
 }
 
+func TestConvertResultUpdatedSentinel(t *testing.T) {
+	// SELECT-shaped responses come back with NumberOfRecordsUpdated=0;
+	// ConvertResult must map them to -1 ("not applicable") so renderers
+	// show "(N rows)" instead of "(0 rows affected)".
+	sel := ConvertResult(&rdsdata.ExecuteStatementOutput{
+		ColumnMetadata: []types.ColumnMetadata{{Name: aws.String("n")}},
+		Records:        [][]types.Field{{&types.FieldMemberLongValue{Value: 1}}},
+	})
+	if sel.Updated != -1 {
+		t.Errorf("select Updated = %d, want -1", sel.Updated)
+	}
+	emptySel := ConvertResult(&rdsdata.ExecuteStatementOutput{
+		ColumnMetadata: []types.ColumnMetadata{{Name: aws.String("n")}},
+	})
+	if emptySel.Updated != -1 {
+		t.Errorf("empty select Updated = %d, want -1", emptySel.Updated)
+	}
+	write := ConvertResult(&rdsdata.ExecuteStatementOutput{NumberOfRecordsUpdated: 3})
+	if write.Updated != 3 {
+		t.Errorf("write Updated = %d, want 3", write.Updated)
+	}
+	noop := ConvertResult(&rdsdata.ExecuteStatementOutput{})
+	if noop.Updated != 0 {
+		t.Errorf("no-op write Updated = %d, want 0", noop.Updated)
+	}
+}
+
 func TestConvertResultRowShorterThanColumns(t *testing.T) {
 	out := &rdsdata.ExecuteStatementOutput{
 		ColumnMetadata: []types.ColumnMetadata{
@@ -206,6 +233,15 @@ func TestColumnWidthsCap(t *testing.T) {
 	}
 }
 
+func TestDisplayWidth(t *testing.T) {
+	cases := map[string]int{"": 0, "abc": 3, "日本語": 6, "aあb": 4}
+	for s, want := range cases {
+		if got := DisplayWidth(s); got != want {
+			t.Errorf("DisplayWidth(%q) = %d, want %d", s, got, want)
+		}
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	cases := []struct {
 		s     string
@@ -217,6 +253,11 @@ func TestTruncate(t *testing.T) {
 		{"hello", 4, "hel…"},
 		{"hello", 1, "…"},
 		{"hello", 0, ""},
+		// Wide (CJK) characters take two cells each and are never split.
+		{"日本語テキスト", 14, "日本語テキスト"},
+		{"日本語テキスト", 5, "日本…"},
+		{"日本語テキスト", 6, "日本…"},
+		{"日本", 1, "…"},
 	}
 	for _, tc := range cases {
 		got := Truncate(tc.s, tc.width)

@@ -105,7 +105,7 @@ type ExecuteRequest struct {
 type ExecuteResponse struct {
 	Columns    []string `json:"columns"`
 	Rows       [][]any  `json:"rows"`
-	Updated    int64    `json:"updated"`
+	Updated    int64    `json:"updated"` // -1 for result-set (SELECT) responses
 	DurationMS int64    `json:"durationMs"`
 
 	NeedsConfirmation bool   `json:"needsConfirmation,omitempty"`
