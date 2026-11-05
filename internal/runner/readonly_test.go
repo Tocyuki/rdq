@@ -17,7 +17,11 @@ func TestIsReadOnlySQL(t *testing.T) {
 		{"line comment", "-- a comment\nSELECT 1", true},
 		{"multiple line comments", "-- one\n-- two\nSELECT 1", true},
 		{"block comment", "/* pre */ SELECT 1", true},
-		{"nested-looking block comment", "/* nested /* inner */ SELECT 1", true},
+		// PostgreSQL nests block comments, so there this comment never
+		// closes, while MySQL reads `SELECT 1`. Ambiguous → reject.
+		{"nested-looking block comment", "/* nested /* inner */ SELECT 1", false},
+		{"properly nested block comment", "/* outer /* inner */ */ SELECT 1", false}, // MySQL sees `*/ SELECT 1`
+		{"pg nested comment hides into", "SELECT 1 /* /* */ ' */ INTO t -- '", false},
 		{"with CTE", "WITH c AS (SELECT 1) SELECT * FROM c", true},
 		{"with recursive CTE", "WITH RECURSIVE c(n) AS (SELECT 1) SELECT * FROM c", true},
 		{"with quoted CTE name", `WITH "recent_users" AS (SELECT 1) SELECT * FROM "recent_users"`, true},
@@ -62,7 +66,13 @@ func TestIsReadOnlySQL(t *testing.T) {
 		{"semicolon inside comment", "SELECT 1 /* ; DELETE FROM t */", true},
 		// MySQL has no dollar quotes, so there this is two statements.
 		{"semicolon inside dollar quote", "SELECT $$;DELETE FROM t$$", false},
-		{"dollar quote without semicolon", "SELECT $$it's fine$$", true},
+		{"dollar quote without semicolon", "SELECT $$fine$$", true},
+		// In MySQL the quote inside opens a string that never closes.
+		{"dollar quote with apostrophe", "SELECT $$it's$$", false},
+		{"mysql double dash before DEL", "SELECT 1 --\x7f '\nINTO OUTFILE 'x' -- '", false},
+		{"mysql ansi quotes", `SELECT "a\" INTO OUTFILE 'x' -- "`, false},
+		{"mysql no backslash escapes", `SELECT 'a\' INTO OUTFILE 'x' -- '`, false},
+		{"unterminated string", "SELECT 'abc", false},
 
 		// Dialect differentials: what one engine lexes as a comment or
 		// string must not hide code the other engine executes.

@@ -53,6 +53,9 @@ func TestNeedsConfirmation(t *testing.T) {
 		{"mysql hash comment hides where", "UPDATE t SET c = 1 # WHERE id = 1", true, "UPDATE without a WHERE"},
 		{"mysql double dash is minus", "DELETE FROM t WHERE x = 1 --1", false, ""},
 
+		{"unterminated string needs confirmation", "UPDATE t SET c = 'x WHERE id = 1", true, "unterminated"},
+		{"pg nested comment hides missing where", "DELETE FROM t /* /* */ WHERE id = 1 */", true, "DELETE without a WHERE"},
+
 		// Multiple statements
 		{"select then delete", "SELECT 1; DELETE FROM t", true, "DELETE without a WHERE"},
 		{"two safe statements still confirm", "SELECT 1; SELECT 2", true, "Multiple statements"},

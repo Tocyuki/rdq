@@ -40,6 +40,9 @@ func NeedsConfirmation(sql string) (bool, string) {
 }
 
 func needsConfirmationIn(d dialect, sql string) (bool, string) {
+	if hasUnterminatedToken(d, sql) {
+		return true, "The statement has an unterminated comment or quoted string; review it before running."
+	}
 	stmts := nonBlankStatements(d, sql)
 	if len(stmts) <= 1 {
 		return needsConfirmationSingle(d, sql)

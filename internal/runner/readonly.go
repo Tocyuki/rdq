@@ -63,6 +63,9 @@ func IsReadOnlySQL(sql string) bool {
 }
 
 func isReadOnlySQLIn(d dialect, sql string) bool {
+	if hasUnterminatedToken(d, sql) {
+		return false
+	}
 	parts := splitSQLStatements(d, sql)
 	for len(parts) > 1 && isBlankSQL(d, parts[len(parts)-1]) {
 		parts = parts[:len(parts)-1]

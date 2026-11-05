@@ -11,29 +11,47 @@ import "strings"
 // and the gates do not know which engine a statement is headed for. If the
 // lexer followed one dialect, SQL could be crafted so that what the gate
 // skips as a comment or string is executable code on the other engine
-// (e.g. MySQL's `/*! ... */` executable comments, or `'a\''` which is a
-// complete string in MySQL but an unterminated one in PostgreSQL). So every
-// gate evaluates the statement once per dialect and combines the results
-// conservatively: read-only only if read-only under every dialect, needs
-// confirmation if it does under any dialect.
+// (e.g. MySQL's `/*! ... */` executable comments, `'a\''` which is a
+// complete string in MySQL but an unterminated one in PostgreSQL, or
+// PostgreSQL's nested block comments). So every gate evaluates the
+// statement once per dialect — including the MySQL sql_mode variants that
+// change quoting — and combines the results conservatively: read-only
+// only if read-only under every dialect, needs confirmation if it does
+// under any dialect. A token left unterminated under any dialect also
+// fails closed, because what that dialect hides may be live code elsewhere.
 
-// dialect selects the lexical rules used to skip comments and quotes.
-type dialect int
+// dialect is a set of lexical rules used to skip comments and quotes.
+type dialect struct {
+	// mysqlComments: `#` comments, `--` is a comment only when followed by
+	// whitespace / a control byte, and `/*! ... */` bodies are executed.
+	mysqlComments bool
+	// nestedComments: `/* /* */ */` nests (PostgreSQL).
+	nestedComments bool
+	// dollarQuotes: $tag$...$tag$ strings (PostgreSQL).
+	dollarQuotes bool
+	// escapeStrings: E'...' strings honour backslash escapes (PostgreSQL).
+	escapeStrings bool
+	// singleBackslash / doubleBackslash: backslash escapes inside '...' /
+	// "..." (MySQL, unless NO_BACKSLASH_ESCAPES; "..." is an identifier
+	// under ANSI_QUOTES).
+	singleBackslash, doubleBackslash bool
+}
 
-const (
-	// dialectPostgres: `--` always starts a comment, '' is the only
-	// escape in standard strings (E'...' also honours backslashes),
-	// "..." is an identifier, and $tag$...$tag$ is a string.
-	dialectPostgres dialect = iota
-	// dialectMySQL: backslash escapes in '...' and "..." (both strings
-	// under the default sql_mode), `#` comments, `--` is a comment only
-	// when followed by whitespace, `/*! ... */` bodies are executed, and
-	// there are no dollar quotes.
-	dialectMySQL
+var (
+	dialectPostgres = dialect{nestedComments: true, dollarQuotes: true, escapeStrings: true}
+	// dialectMySQL is the default sql_mode.
+	dialectMySQL = dialect{mysqlComments: true, singleBackslash: true, doubleBackslash: true}
+	// dialectMySQLANSIQuotes: sql_mode=ANSI_QUOTES ("..." is an identifier).
+	dialectMySQLANSIQuotes = dialect{mysqlComments: true, singleBackslash: true}
+	// dialectMySQLNoBackslash: sql_mode=NO_BACKSLASH_ESCAPES (with or
+	// without ANSI_QUOTES, backslash is an ordinary character).
+	dialectMySQLNoBackslash = dialect{mysqlComments: true}
 )
 
-// allDialects is the set every public gate evaluates against.
-var allDialects = []dialect{dialectPostgres, dialectMySQL}
+// allDialects is the set every public gate evaluates against. The MySQL
+// sql_mode variants are included because the session's sql_mode is not
+// known to the gate either.
+var allDialects = []dialect{dialectPostgres, dialectMySQL, dialectMySQLANSIQuotes, dialectMySQLNoBackslash}
 
 // skipSQLCommentAt reports whether a comment starts at sql[i] under d and,
 // if so, returns the index just past it. For MySQL executable comments
@@ -47,15 +65,15 @@ func skipSQLCommentAt(d dialect, sql string, i int) (next int, skipped, terminat
 	rest := sql[i:]
 	switch {
 	case strings.HasPrefix(rest, "--"):
-		if d == dialectMySQL && len(rest) > 2 && !isSQLCommentSpace(rest[2]) {
+		if d.mysqlComments && len(rest) > 2 && !isSQLCommentSpace(rest[2]) {
 			// MySQL: `--1` is "minus minus 1", not a comment.
 			return i, false, true
 		}
 		return skipToLineEnd(sql, i), true, true
-	case d == dialectMySQL && rest[0] == '#':
+	case d.mysqlComments && rest[0] == '#':
 		return skipToLineEnd(sql, i), true, true
 	case strings.HasPrefix(rest, "/*"):
-		if d == dialectMySQL {
+		if d.mysqlComments {
 			marker := 0
 			switch {
 			case strings.HasPrefix(rest, "/*!"):
@@ -71,6 +89,9 @@ func skipSQLCommentAt(d dialect, sql string, i int) (next int, skipped, terminat
 				return j, true, true
 			}
 		}
+		if d.nestedComments {
+			return skipNestedBlockComment(sql, i)
+		}
 		j := strings.Index(rest[2:], "*/")
 		if j < 0 {
 			return len(sql), true, false
@@ -78,6 +99,28 @@ func skipSQLCommentAt(d dialect, sql string, i int) (next int, skipped, terminat
 		return i + 2 + j + 2, true, true
 	}
 	return i, false, true
+}
+
+// skipNestedBlockComment skips a PostgreSQL block comment starting at
+// sql[i], where each `/*` opens a nested level that needs its own `*/`.
+func skipNestedBlockComment(sql string, i int) (int, bool, bool) {
+	depth := 0
+	for j := i; j+1 < len(sql); {
+		switch {
+		case sql[j] == '/' && sql[j+1] == '*':
+			depth++
+			j += 2
+		case sql[j] == '*' && sql[j+1] == '/':
+			depth--
+			j += 2
+			if depth == 0 {
+				return j, true, true
+			}
+		default:
+			j++
+		}
+	}
+	return len(sql), true, false
 }
 
 // skipToLineEnd returns the index of the newline ending the line comment
@@ -90,9 +133,10 @@ func skipToLineEnd(sql string, i int) int {
 	return len(sql)
 }
 
-// isSQLCommentSpace is MySQL's rule for what may follow `--` in a comment.
+// isSQLCommentSpace is MySQL's rule for what may follow `--` in a comment:
+// a space or any control character (including DEL).
 func isSQLCommentSpace(b byte) bool {
-	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' || b == '\v' || b < 0x20
+	return b <= 0x20 || b == 0x7f
 }
 
 // skipSQLNoiseAt reports whether a comment or quoted token starts at
@@ -117,11 +161,11 @@ func skipSQLNoiseAt(d dialect, sql string, i int) (next int, skipped, terminated
 	switch c := sql[i]; c {
 	case '\'', '"', '`':
 		backslash := false
-		switch {
-		case d == dialectMySQL:
-			backslash = c != '`'
-		case c == '\'':
-			backslash = isPostgresEscapeString(sql, i)
+		switch c {
+		case '\'':
+			backslash = d.singleBackslash || (d.escapeStrings && isPostgresEscapeString(sql, i))
+		case '"':
+			backslash = d.doubleBackslash
 		}
 		next, ok := skipSQLQuoted(sql, i, c, backslash)
 		if !ok {
@@ -129,7 +173,7 @@ func skipSQLNoiseAt(d dialect, sql string, i int) (next int, skipped, terminated
 		}
 		return next, true, true
 	case '$':
-		if d != dialectPostgres {
+		if !d.dollarQuotes {
 			return i, false, true
 		}
 		tag, ok := dollarQuoteTag(sql, i)
@@ -221,6 +265,25 @@ func splitSQLStatements(d dialect, sql string) []string {
 		i++
 	}
 	return append(parts, sql[start:])
+}
+
+// hasUnterminatedToken reports whether sql contains a comment or quoted
+// token that never closes under d. Such input is a syntax error for the
+// engine that lexes it that way, but under another engine's rules the
+// "rest of the input" may be live code, so the gates fail closed on it.
+func hasUnterminatedToken(d dialect, sql string) bool {
+	for i := 0; i < len(sql); {
+		next, skipped, terminated := skipSQLNoiseAt(d, sql, i)
+		if !skipped {
+			i++
+			continue
+		}
+		if !terminated {
+			return true
+		}
+		i = next
+	}
+	return false
 }
 
 // isBlankSQL reports whether sql contains nothing but whitespace and
