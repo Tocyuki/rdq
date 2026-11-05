@@ -39,6 +39,10 @@ type dialect struct {
 
 var (
 	dialectPostgres = dialect{nestedComments: true, dollarQuotes: true, escapeStrings: true}
+	// dialectPostgresNonStandardStrings: standard_conforming_strings=off
+	// (deprecated, but settable per session) makes backslash an escape in
+	// ordinary '...' strings too.
+	dialectPostgresNonStandardStrings = dialect{nestedComments: true, dollarQuotes: true, escapeStrings: true, singleBackslash: true}
 	// dialectMySQL is the default sql_mode.
 	dialectMySQL = dialect{mysqlComments: true, singleBackslash: true, doubleBackslash: true}
 	// dialectMySQLANSIQuotes: sql_mode=ANSI_QUOTES ("..." is an identifier).
@@ -48,10 +52,17 @@ var (
 	dialectMySQLNoBackslash = dialect{mysqlComments: true}
 )
 
-// allDialects is the set every public gate evaluates against. The MySQL
-// sql_mode variants are included because the session's sql_mode is not
-// known to the gate either.
-var allDialects = []dialect{dialectPostgres, dialectMySQL, dialectMySQLANSIQuotes, dialectMySQLNoBackslash}
+// allDialects is the set every public gate evaluates against. Session
+// settings that change quoting (MySQL sql_mode, PostgreSQL
+// standard_conforming_strings) are not known to the gate either, so their
+// variants are included.
+var allDialects = []dialect{
+	dialectPostgres,
+	dialectPostgresNonStandardStrings,
+	dialectMySQL,
+	dialectMySQLANSIQuotes,
+	dialectMySQLNoBackslash,
+}
 
 // skipSQLCommentAt reports whether a comment starts at sql[i] under d and,
 // if so, returns the index just past it. For MySQL executable comments

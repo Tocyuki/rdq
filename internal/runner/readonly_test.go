@@ -73,6 +73,14 @@ func TestIsReadOnlySQL(t *testing.T) {
 		{"mysql ansi quotes", `SELECT "a\" INTO OUTFILE 'x' -- "`, false},
 		{"mysql no backslash escapes", `SELECT 'a\' INTO OUTFILE 'x' -- '`, false},
 		{"unterminated string", "SELECT 'abc", false},
+		// PostgreSQL with standard_conforming_strings=off: `'a\''` is the
+		// complete string "a'", so the INTO after it is live code.
+		{"pg non-standard strings", `SELECT 'a\'' INTO t -- '`, false},
+		{"pg non-standard strings hides semicolon", `SELECT 'a\''; DELETE FROM t; -- '`, false},
+		// Only the non-standard-strings reading sees INTO here: standard
+		// PostgreSQL and NO_BACKSLASH_ESCAPES keep it inside the string,
+		// and the other MySQL modes treat `# ...` as a comment.
+		{"pg non-standard strings only", `SELECT 'a\'' # INTO t -- '`, false},
 
 		// Dialect differentials: what one engine lexes as a comment or
 		// string must not hide code the other engine executes.
