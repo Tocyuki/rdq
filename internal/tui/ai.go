@@ -95,10 +95,6 @@ type profileSwitchedMsg struct {
 	err     error
 }
 
-// schemaFetchTimeout caps how long we wait for the introspection query so the
-// background fetch never holds resources forever.
-const schemaFetchTimeout = 30 * time.Second
-
 // fetchSchemaCmd loads the cached snapshot first (instant) and falls back to
 // a live information_schema fetch in the background. The result is delivered
 // via schemaLoadedMsg.
@@ -107,7 +103,7 @@ func fetchSchemaCmd(client *rdsdata.Client, tgt target) tea.Cmd {
 		if cached, err := schema.LoadCache(tgt.cluster, tgt.database); err == nil && cached != nil && len(cached.Columns) > 0 {
 			return schemaLoadedMsg{snapshot: cached}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), schemaFetchTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), schema.FetchTimeout)
 		defer cancel()
 		snap, err := schema.Fetch(ctx, client, tgt.cluster, tgt.secret, tgt.database)
 		if err != nil {

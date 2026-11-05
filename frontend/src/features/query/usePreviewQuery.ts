@@ -69,11 +69,79 @@ function buildWhereClause(filters: PreviewFilter[]): string {
   return ` WHERE ${filters.map(buildPredicate).join(' AND ')}`
 }
 
+export interface PreviewColumn {
+  name: string
+  type: string
+  /** 1-based position in the primary key; 0 / undefined when not part of it. */
+  primaryKey?: number
+}
+
+/**
+ * Column types that have no default ordering (PostgreSQL json / xml /
+ * geometric types, MySQL json / spatial types) or whose ordering cannot be
+ * known from information_schema (USER-DEFINED, ARRAY). ORDER BY on these
+ * fails or is unreliable, so they are never used as implicit sort keys.
+ */
+const UNORDERABLE_TYPES = new Set([
+  'json',
+  'xml',
+  'point',
+  'line',
+  'lseg',
+  'box',
+  'path',
+  'polygon',
+  'circle',
+  'user-defined',
+  'array',
+  'geometry',
+  'linestring',
+  'multipoint',
+  'multilinestring',
+  'multipolygon',
+  'geometrycollection',
+  'geomcollection',
+])
+
+/**
+ * stableOrderColumns picks the columns used to give LIMIT/OFFSET paging a
+ * deterministic row order. Without an ORDER BY the database may return
+ * rows in any order on each page, so rows can repeat or go missing across
+ * pages.
+ *
+ * - Primary key columns (in key order) when the table has one.
+ * - Otherwise every column of an orderable type — `ORDER BY 1` is not
+ *   used because it fails when the first column is e.g. json.
+ * - [] when the schema is unknown; the preview then runs unordered.
+ */
+export function stableOrderColumns(columns: PreviewColumn[], primaryKeysKnown: boolean): string[] {
+  if (primaryKeysKnown) {
+    const pk = columns
+      .filter((c) => (c.primaryKey ?? 0) > 0)
+      .sort((a, b) => (a.primaryKey ?? 0) - (b.primaryKey ?? 0))
+      .map((c) => c.name)
+    if (pk.length > 0) return pk
+  }
+  return columns.filter((c) => !UNORDERABLE_TYPES.has(c.type.toLowerCase())).map((c) => c.name)
+}
+
+function buildOrderBy(sort: PreviewSort, orderKeys: string[]): string {
+  const terms: string[] = []
+  if (sort) terms.push(`${safeIdent(sort.column)} ${sort.dir.toUpperCase()}`)
+  // The stable keys also act as a tiebreaker after a user-chosen sort
+  // column, which on its own may contain duplicates.
+  for (const key of orderKeys) {
+    if (key !== sort?.column) terms.push(safeIdent(key))
+  }
+  return terms.length > 0 ? ` ORDER BY ${terms.join(', ')}` : ''
+}
+
 /**
  * buildPreviewSQL returns the SELECT statement used by the table
  * preview overlay. Filters become WHERE predicates ANDed together; sort
- * becomes ORDER BY. See the SQL DIALECT NOTE at the top of this file
- * for engine compatibility.
+ * plus the stable orderKeys (see stableOrderColumns) become ORDER BY.
+ * See the SQL DIALECT NOTE at the top of this file for engine
+ * compatibility.
  */
 export function buildPreviewSQL(
   schema: string,
@@ -81,11 +149,10 @@ export function buildPreviewSQL(
   offset: number,
   sort: PreviewSort = null,
   filters: PreviewFilter[] = [],
+  orderKeys: string[] = [],
 ): string {
   const where = buildWhereClause(filters)
-  const orderBy = sort
-    ? ` ORDER BY ${safeIdent(sort.column)} ${sort.dir.toUpperCase()}`
-    : ''
+  const orderBy = buildOrderBy(sort, orderKeys)
   return `SELECT * FROM ${safeIdent(schema)}.${safeIdent(table)}${where}${orderBy} LIMIT ${PREVIEW_PAGE_SIZE} OFFSET ${offset}`
 }
 
@@ -113,6 +180,7 @@ interface PreviewArgs {
   offset: number
   sort: PreviewSort
   filters: PreviewFilter[]
+  orderKeys: string[]
   enabled: boolean
 }
 
@@ -157,9 +225,10 @@ export function usePreviewQuery(args: PreviewArgs) {
     offset,
     sort,
     filters,
+    orderKeys,
     enabled,
   } = args
-  const sql = buildPreviewSQL(schema, table, offset, sort, filters)
+  const sql = buildPreviewSQL(schema, table, offset, sort, filters, orderKeys)
   const sortKey = sort ? `${sort.column}:${sort.dir}` : ''
   return useQuery<ExecuteResponseBody, Error>({
     queryKey: [
@@ -171,6 +240,7 @@ export function usePreviewQuery(args: PreviewArgs) {
       offset,
       sortKey,
       filterCacheKey(filters),
+      orderKeys.join(','),
     ],
     queryFn: ({ signal }) =>
       endpoints.execute({ profile, cluster, secret, database, sql }, signal),

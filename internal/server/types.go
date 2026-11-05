@@ -113,11 +113,14 @@ type ExecuteResponse struct {
 }
 
 // SchemaColumnDTO is one row from information_schema.columns.
+// PrimaryKey is the 1-based position in the table's primary key (0 = not
+// part of it); only meaningful when SchemaDTO.PrimaryKeysKnown is true.
 type SchemaColumnDTO struct {
-	Schema string `json:"schema"`
-	Table  string `json:"table"`
-	Name   string `json:"name"`
-	Type   string `json:"type"`
+	Schema     string `json:"schema"`
+	Table      string `json:"table"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	PrimaryKey int    `json:"primaryKey,omitempty"`
 }
 
 // SchemaDTO is the JSON body of /api/schema. FromCache=true means the
@@ -128,6 +131,9 @@ type SchemaDTO struct {
 	FetchedAt string            `json:"fetchedAt"`
 	Columns   []SchemaColumnDTO `json:"columns"`
 	FromCache bool              `json:"fromCache"`
+	// PrimaryKeysKnown is false for caches written by older versions or
+	// when the primary-key lookup failed.
+	PrimaryKeysKnown bool `json:"primaryKeysKnown"`
 }
 
 // SchemaRefreshRequest is the JSON body of POST /api/schema/refresh.

@@ -16,8 +16,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Tocyuki/rdq/internal/fsutil"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
@@ -30,15 +33,25 @@ type Column struct {
 	Table  string `json:"table"`
 	Name   string `json:"name"`
 	Type   string `json:"type"`
+	// PrimaryKey is the column's 1-based position in its table's primary
+	// key, or 0 when it is not part of one.
+	PrimaryKey int `json:"primary_key,omitempty"`
 }
 
 // Snapshot captures the full set of columns for one (cluster, database) pair
 // at a point in time.
 type Snapshot struct {
+	// Version is the cache format version (see snapshotVersion).
+	Version   int       `json:"version,omitempty"`
 	Cluster   string    `json:"cluster"`
 	Database  string    `json:"database"`
 	FetchedAt time.Time `json:"fetched_at"`
 	Columns   []Column  `json:"columns"`
+	// PrimaryKeysKnown reports whether Column.PrimaryKey was populated.
+	// It is false for caches written by older rdq versions and when the
+	// primary-key lookup failed, so consumers can tell "no primary key"
+	// apart from "unknown".
+	PrimaryKeysKnown bool `json:"primary_keys_known,omitempty"`
 }
 
 // fetchQueryFiltered joins information_schema.schemata to drop schemas
@@ -67,6 +80,38 @@ const fetchQuery = `SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE
 FROM information_schema.COLUMNS
 ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION`
 
+// primaryKeyQuery lists primary-key columns in key order. TABLE_CONSTRAINTS
+// and KEY_COLUMN_USAGE are standard information_schema views available on
+// both Aurora PostgreSQL and Aurora MySQL.
+const primaryKeyQuery = `SELECT kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.COLUMN_NAME, kcu.ORDINAL_POSITION
+FROM information_schema.TABLE_CONSTRAINTS tc
+JOIN information_schema.KEY_COLUMN_USAGE kcu
+  ON kcu.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+ AND kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+ AND kcu.TABLE_SCHEMA = tc.TABLE_SCHEMA
+ AND kcu.TABLE_NAME = tc.TABLE_NAME
+WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+ORDER BY kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.ORDINAL_POSITION`
+
+// FetchTimeout is the overall budget for one Fetch (all pages plus the
+// primary-key lookup). Shared by the TUI and the GUI server.
+const FetchTimeout = 2 * time.Minute
+
+// snapshotVersion is bumped whenever Snapshot gains data that older caches
+// lack. LoadCache treats an older cache as a miss so it is refetched once
+// automatically. Version 2 added primary-key information.
+const snapshotVersion = 2
+
+// fetchPageSize bounds the rows per ExecuteStatement call. The Data API
+// rejects responses larger than 1 MB, which a single unpaged
+// information_schema query exceeds on large databases; 2000 short rows
+// stay far below that.
+const fetchPageSize = 2000
+
+// execFunc runs one SQL statement; it is the seam that lets tests drive
+// the paging logic without a Data API client.
+type execFunc func(ctx context.Context, sql string) (*rdsdata.ExecuteStatementOutput, error)
+
 // Fetch executes the introspection query against the given cluster and
 // database and returns a Snapshot. Caller is expected to wrap network errors
 // with retry semantics if needed; this function returns them unwrapped so the
@@ -76,22 +121,31 @@ ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION`
 // see `information_schema` / `pg_catalog` noise in the sidebar. On the
 // first error (typically Aurora MySQL, which lacks schema_owner) it
 // retries with the simple query; only if the retry also fails does the
-// error propagate.
+// error propagate. Results are fetched in pages (see fetchPageSize), and
+// primary-key membership is looked up on a best-effort basis.
 func Fetch(ctx context.Context, client *rdsdata.Client, cluster, secret, database string) (*Snapshot, error) {
-	out, err := executeFetch(ctx, client, cluster, secret, database, fetchQueryFiltered)
+	exec := func(ctx context.Context, sql string) (*rdsdata.ExecuteStatementOutput, error) {
+		return executeFetch(ctx, client, cluster, secret, database, sql)
+	}
+	return fetchWith(ctx, exec, cluster, database)
+}
+
+func fetchWith(ctx context.Context, exec execFunc, cluster, database string) (*Snapshot, error) {
+	records, err := fetchAllPages(ctx, exec, fetchQueryFiltered)
 	if err != nil {
-		out, err = executeFetch(ctx, client, cluster, secret, database, fetchQuery)
+		records, err = fetchAllPages(ctx, exec, fetchQuery)
 		if err != nil {
 			return nil, fmt.Errorf("fetch information_schema: %w", err)
 		}
 	}
 
 	snapshot := &Snapshot{
+		Version:   snapshotVersion,
 		Cluster:   cluster,
 		Database:  database,
 		FetchedAt: time.Now().UTC(),
 	}
-	for _, record := range out.Records {
+	for _, record := range records {
 		if len(record) < 4 {
 			continue
 		}
@@ -106,7 +160,47 @@ func Fetch(ctx context.Context, client *rdsdata.Client, cluster, secret, databas
 		}
 		snapshot.Columns = append(snapshot.Columns, col)
 	}
+
+	// Primary keys are an enhancement (stable preview ordering), so a
+	// failure here leaves PrimaryKeysKnown=false instead of failing Fetch.
+	if pkRecords, err := fetchAllPages(ctx, exec, primaryKeyQuery); err == nil {
+		applyPrimaryKeys(snapshot, pkRecords)
+		snapshot.PrimaryKeysKnown = true
+	}
 	return snapshot, nil
+}
+
+// fetchAllPages runs base (which must end in a deterministic ORDER BY)
+// repeatedly with LIMIT/OFFSET until a short page signals the end.
+func fetchAllPages(ctx context.Context, exec execFunc, base string) ([][]types.Field, error) {
+	var all [][]types.Field
+	for offset := 0; ; offset += fetchPageSize {
+		out, err := exec(ctx, fmt.Sprintf("%s\nLIMIT %d OFFSET %d", base, fetchPageSize, offset))
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, out.Records...)
+		if len(out.Records) != fetchPageSize {
+			return all, nil
+		}
+	}
+}
+
+func applyPrimaryKeys(s *Snapshot, records [][]types.Field) {
+	type colKey struct{ schema, table, name string }
+	pos := make(map[colKey]int, len(records))
+	for _, r := range records {
+		if len(r) < 4 {
+			continue
+		}
+		if n := intField(r[3]); n > 0 {
+			pos[colKey{stringField(r[0]), stringField(r[1]), stringField(r[2])}] = n
+		}
+	}
+	for i := range s.Columns {
+		c := &s.Columns[i]
+		c.PrimaryKey = pos[colKey{c.Schema, c.Table, c.Name}]
+	}
 }
 
 // executeFetch is the thin Data API wrapper shared by Fetch's primary
@@ -130,6 +224,20 @@ func stringField(f types.Field) string {
 	return ""
 }
 
+// intField extracts an integer from a Data API Field. information_schema
+// ordinal columns come back as longs on MySQL and may come back as strings
+// for PostgreSQL's cardinal_number domain.
+func intField(f types.Field) int {
+	switch v := f.(type) {
+	case *types.FieldMemberLongValue:
+		return int(v.Value)
+	case *types.FieldMemberStringValue:
+		n, _ := strconv.Atoi(strings.TrimSpace(v.Value))
+		return n
+	}
+	return 0
+}
+
 // LoadCache reads a previously-saved Snapshot from disk. A missing file is
 // not an error; callers can interpret nil as "no cache yet".
 func LoadCache(cluster, database string) (*Snapshot, error) {
@@ -148,6 +256,13 @@ func LoadCache(cluster, database string) (*Snapshot, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("parse schema cache %s: %w", path, err)
 	}
+	if s.Version < snapshotVersion {
+		// Written by an older rdq: missing data (e.g. primary keys) would
+		// silently degrade features, so report a miss and let the caller
+		// refetch. Keyed on the version rather than PrimaryKeysKnown so a
+		// current cache whose PK lookup legitimately failed is still used.
+		return nil, nil
+	}
 	return &s, nil
 }
 
@@ -161,37 +276,11 @@ func SaveCache(s *Snapshot) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create schema cache dir: %w", err)
-	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal snapshot: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".schema-*.json")
-	if err != nil {
-		return fmt.Errorf("create temp schema file: %w", err)
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("write temp schema file: %w", err)
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename schema cache: %w", err)
-	}
-	return nil
+	return fsutil.WriteFileAtomic(path, data, 0o600)
 }
 
 // cachePath returns the on-disk path for a (cluster, database) snapshot. The
