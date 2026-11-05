@@ -99,6 +99,12 @@ export function AskDialog({ open, onOpenChange, onAutoRun }: Props) {
         toast.success('Auto-running read-only SQL…')
       }
     } catch (err) {
+      // Roll back the optimistic user turn and restore the typed prompt.
+      // Leaving the user turn in place would make the next submit send two
+      // consecutive user messages, which Bedrock Converse rejects — every
+      // retry in this dialog would then fail until the user hit Clear.
+      setMessages(messages)
+      setPrompt(prompt)
       toast.error(err instanceof Error ? err.message : 'Ask failed')
     }
   }

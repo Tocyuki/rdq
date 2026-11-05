@@ -80,6 +80,10 @@ export function SqlEditorPage() {
   }, [])
 
   const runQuery = useCallback(() => {
+    // The Run button is disabled while pending, but Cmd+Enter in the editor
+    // is not; without this guard a double press runs a write twice and the
+    // slower response can overwrite the newer lastResult.
+    if (execute.isPending) return
     if (!sessionIsComplete(session.data)) {
       toast.error('Pick a profile, cluster, secret, and database first.')
       return
@@ -107,6 +111,10 @@ export function SqlEditorPage() {
   }, [session.data, sql, editorView, execute])
 
   const runAutoSql = useCallback((autoSql: string) => {
+    if (execute.isPending) {
+      toast.error('A query is already running.')
+      return
+    }
     if (!sessionIsComplete(session.data)) {
       toast.error('Pick a profile, cluster, secret, and database first.')
       return

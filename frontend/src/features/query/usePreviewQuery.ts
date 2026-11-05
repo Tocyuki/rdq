@@ -22,17 +22,15 @@ function safeIdent(s: string): string {
 }
 
 /**
- * quoteValue keeps numeric / boolean literals unquoted so the server-
- * side type coerces them naturally; everything else falls back to a
- * single-quoted string. SQL injection risk is bounded — these filters
- * originate from the same authenticated user who can run any SQL via
- * the editor — but we still escape single quotes so a literal
- * apostrophe in user input doesn't blow up parsing.
+ * quoteValue always emits a single-quoted literal. PostgreSQL resolves an
+ * untyped quoted literal to the column's type (`int_col = '123'`,
+ * `bool_col = 'true'` both work), whereas an unquoted number against a text
+ * column (`text_col = 123`) fails with "operator does not exist". SQL
+ * injection risk is bounded — these filters originate from the same
+ * authenticated user who can run any SQL via the editor — but we still
+ * escape single quotes so a literal apostrophe doesn't break parsing.
  */
 function quoteValue(v: string): string {
-  const trimmed = v.trim()
-  if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) return trimmed
-  if (trimmed === 'true' || trimmed === 'false') return trimmed
   return `'${v.replace(/'/g, "''")}'`
 }
 
@@ -59,7 +57,9 @@ function buildPredicate(f: PreviewFilter): string {
     const esc = escapeLikePattern(f.value)
     const pat =
       op === 'contains' ? `%${esc}%` : op === 'starts with' ? `${esc}%` : `%${esc}`
-    return `${col} ILIKE '${pat}' ESCAPE '\\'`
+    // Cast to text so substring filters also work on numeric / timestamp
+    // columns (ILIKE is only defined for text types).
+    return `${col}::text ILIKE '${pat}' ESCAPE '\\'`
   }
   return `${col} ${op} ${quoteValue(f.value)}`
 }
