@@ -36,11 +36,21 @@ func TestNeedsConfirmation(t *testing.T) {
 		{"update where in string only", "UPDATE t SET note = 'WHERE trick'", true, "UPDATE without a WHERE"},
 		{"update trailing line comment", "UPDATE t SET x = 1 -- WHERE id = 1", true, "UPDATE without a WHERE"},
 		{"update where inside quoted identifier", `UPDATE t SET "WHERE" = 1`, true, "UPDATE without a WHERE"},
-		{"update where in subquery", "UPDATE t SET x = (SELECT max(id) FROM u WHERE u.k = 1)", false, ""},
-		// ^ subquery WHERE is intentionally accepted. The naive detector cannot
-		// tell whether WHERE binds to the outer UPDATE or an inner SELECT; in
-		// practice users almost always add a top-level WHERE after SET, so we
-		// accept false negatives on exotic UPDATE-with-subquery-only shapes.
+		{"update where in subquery only", "UPDATE t SET x = (SELECT max(id) FROM u WHERE u.k = 1)", true, "UPDATE without a WHERE"},
+		// ^ a WHERE inside a subquery does not restrict the outer UPDATE, so
+		// every row of t is rewritten. Only a depth-0 WHERE counts.
+		{"update subquery plus top-level where", "UPDATE t SET x = (SELECT max(id) FROM u WHERE u.k = 1) WHERE t.id = 2", false, ""},
+		{"delete using subquery where only", "DELETE FROM t USING (SELECT id FROM u WHERE u.x = 1) s", true, "DELETE without a WHERE"},
+		{"update where in dollar quote", "UPDATE t SET c = $$ WHERE $$", true, "UPDATE without a WHERE"},
+		{"update where in tagged dollar quote", "UPDATE t SET c = $q$ WHERE $q$", true, "UPDATE without a WHERE"},
+		{"update where in backtick id", "UPDATE t SET `WHERE` = 1", true, "UPDATE without a WHERE"},
+		{"update bind placeholder is not dollar quote", "UPDATE t SET c = $1 WHERE id = $2", false, ""},
+
+		// Multiple statements
+		{"select then delete", "SELECT 1; DELETE FROM t", true, "DELETE without a WHERE"},
+		{"two safe statements still confirm", "SELECT 1; SELECT 2", true, "Multiple statements"},
+		{"trailing semicolon is single", "DELETE FROM t WHERE id = 1;", false, ""},
+		{"semicolon in string is single", "UPDATE t SET c = 'a;b' WHERE id = 1", false, ""},
 
 		// TRUNCATE
 		{"truncate", "TRUNCATE TABLE t", true, "TRUNCATE"},
@@ -70,13 +80,18 @@ func TestStripSQLNoise(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"line comment", "a -- comment\nb", "a \nb"},
-		{"block comment", "a /* x */ b", "a  b"},
-		{"unterminated block", "a /* x", "a "},
-		{"string literal", "a 'x y' b", "a  b"},
-		{"escaped quote", "a 'it''s fine' b", "a  b"},
-		{"double quoted id", `a "WHERE" b`, "a  b"},
-		{"mixed", "UPDATE t /* foo */ SET x = 1 -- WHERE\n", "UPDATE t  SET x = 1 \n"},
+		// Each comment / quoted token collapses to one space so neighbouring
+		// tokens never fuse (`1/**/INTO` must not become `1INTO`).
+		{"line comment", "a -- comment\nb", "a  \nb"},
+		{"block comment", "a /* x */ b", "a   b"},
+		{"no fusion", "1/**/INTO", "1 INTO"},
+		{"unterminated block", "a /* x", "a  "},
+		{"string literal", "a 'x y' b", "a   b"},
+		{"escaped quote", "a 'it''s fine' b", "a   b"},
+		{"double quoted id", `a "WHERE" b`, "a   b"},
+		{"backtick id", "a `WHERE` b", "a   b"},
+		{"dollar quote", "a $$WHERE$$ b", "a   b"},
+		{"mixed", "UPDATE t /* foo */ SET x = 1 -- WHERE\n", "UPDATE t   SET x = 1  \n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

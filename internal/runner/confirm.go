@@ -21,7 +21,26 @@ import (
 // Comments and string literals are stripped before the WHERE search so
 // `UPDATE t SET c = 'WHERE it failed'` and
 // `DELETE FROM t -- no WHERE here` are not fooled.
+//
+// A request carrying several `;`-separated statements always needs
+// confirmation: each statement is checked individually (so the most
+// specific reason wins), and if none trips a rule on its own the batch
+// still gets a generic warning because the classifier cannot reason about
+// how the statements interact.
 func NeedsConfirmation(sql string) (bool, string) {
+	stmts := nonBlankStatements(sql)
+	if len(stmts) <= 1 {
+		return needsConfirmationSingle(sql)
+	}
+	for _, stmt := range stmts {
+		if need, reason := needsConfirmationSingle(stmt); need {
+			return true, reason
+		}
+	}
+	return true, "Multiple statements in one request; review each of them before running."
+}
+
+func needsConfirmationSingle(sql string) (bool, string) {
 	head := firstKeyword(sql)
 	switch head {
 	case "WITH":
@@ -30,14 +49,14 @@ func NeedsConfirmation(sql string) (bool, string) {
 			return true, "WITH statements can hide destructive writes; review this query before running it."
 		}
 		for _, body := range bodies {
-			if need, reason := NeedsConfirmation(body); need {
+			if need, reason := needsConfirmationSingle(body); need {
 				return true, reason
 			}
 		}
 		if strings.TrimSpace(tail) == "" {
 			return true, "WITH statements can hide destructive writes; review this query before running it."
 		}
-		return NeedsConfirmation(tail)
+		return needsConfirmationSingle(tail)
 	case "TRUNCATE":
 		return true, "TRUNCATE removes every row from the table — this is not reversible."
 	case "DELETE":
@@ -52,105 +71,11 @@ func NeedsConfirmation(sql string) (bool, string) {
 	return false, ""
 }
 
-// hasWhereClause returns true when sql contains a WHERE keyword that is
-// *not* inside a comment or string literal. Case is ignored.
+// hasWhereClause returns true when sql contains a top-level WHERE keyword
+// that is *not* inside a comment, string literal, or subquery. Case is
+// ignored. A WHERE that only appears in a subquery (e.g.
+// `UPDATE t SET c = (SELECT max(v) FROM u WHERE ...)`) does not restrict
+// the outer statement, so it does not count.
 func hasWhereClause(sql string) bool {
-	stripped := stripSQLNoise(sql)
-	upper := strings.ToUpper(stripped)
-	return containsKeyword(upper, "WHERE")
-}
-
-// stripSQLNoise removes line comments, block comments, single-quoted
-// strings, and double-quoted identifiers from sql. It is a naive
-// lexer, not a full SQL parser — enough to avoid the common false
-// positives on WHERE detection without pulling in an external
-// dependency.
-func stripSQLNoise(sql string) string {
-	var out strings.Builder
-	out.Grow(len(sql))
-	i := 0
-	for i < len(sql) {
-		// -- line comment
-		if i+1 < len(sql) && sql[i] == '-' && sql[i+1] == '-' {
-			for i < len(sql) && sql[i] != '\n' {
-				i++
-			}
-			continue
-		}
-		// /* ... */ block comment (no nesting — standard SQL)
-		if i+1 < len(sql) && sql[i] == '/' && sql[i+1] == '*' {
-			i += 2
-			for i+1 < len(sql) && !(sql[i] == '*' && sql[i+1] == '/') {
-				i++
-			}
-			if i+1 < len(sql) {
-				i += 2
-			} else {
-				i = len(sql)
-			}
-			continue
-		}
-		// 'single-quoted string' with '' escape
-		if sql[i] == '\'' {
-			i++
-			for i < len(sql) {
-				if sql[i] == '\'' {
-					if i+1 < len(sql) && sql[i+1] == '\'' {
-						i += 2 // escaped quote
-						continue
-					}
-					i++
-					break
-				}
-				i++
-			}
-			continue
-		}
-		// "double-quoted identifier"
-		if sql[i] == '"' {
-			i++
-			for i < len(sql) && sql[i] != '"' {
-				i++
-			}
-			if i < len(sql) {
-				i++
-			}
-			continue
-		}
-		out.WriteByte(sql[i])
-		i++
-	}
-	return out.String()
-}
-
-// containsKeyword returns true when upper contains keyword as a standalone
-// ASCII-alphanumeric word (i.e. bounded on both sides by non-word bytes or
-// start/end of string). Reimplemented here instead of reaching for regexp
-// so the detector has zero non-stdlib dependencies at this hot path.
-func containsKeyword(upper, keyword string) bool {
-	n := len(keyword)
-	for i := 0; i+n <= len(upper); i++ {
-		if upper[i:i+n] != keyword {
-			continue
-		}
-		if isWordByte(byteAt(upper, i-1)) || isWordByte(byteAt(upper, i+n)) {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-func byteAt(s string, i int) byte {
-	if i < 0 || i >= len(s) {
-		return 0
-	}
-	return s[i]
-}
-
-func isWordByte(b byte) bool {
-	return (b >= 'A' && b <= 'Z') ||
-		(b >= 'a' && b <= 'z') ||
-		(b >= '0' && b <= '9') ||
-		b == '_'
+	return hasTopLevelKeyword(sql, "WHERE")
 }

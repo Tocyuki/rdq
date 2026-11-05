@@ -51,6 +51,33 @@ func TestIsReadOnlySQL(t *testing.T) {
 		{"unclosed block comment", "/* never closed", false},
 		{"non-alpha start", "123 SELECT", false},
 		{"semicolon-led", ";SELECT 1", false},
+
+		// Multiple statements: every statement must be read-only.
+		{"trailing semicolon", "SELECT 1;", true},
+		{"trailing semicolon and comment", "SELECT 1; -- done", true},
+		{"two selects", "SELECT 1; SELECT 2", true},
+		{"select then delete", "SELECT 1; DELETE FROM t", false},
+		{"select then drop", "select 1;drop table t", false},
+		{"semicolon inside string", "SELECT ';DELETE FROM t'", true},
+		{"semicolon inside comment", "SELECT 1 /* ; DELETE FROM t */", true},
+		{"semicolon inside dollar quote", "SELECT $$;DELETE FROM t$$", true},
+
+		// EXPLAIN is only as read-only as the statement it explains.
+		{"explain analyze select", "EXPLAIN ANALYZE SELECT 1", true},
+		{"explain analyze delete", "EXPLAIN ANALYZE DELETE FROM t", false},
+		{"explain analyse verbose update", "explain analyse verbose UPDATE t SET x = 1", false},
+		{"explain options delete", "EXPLAIN (ANALYZE, BUFFERS) DELETE FROM t", false},
+		{"explain options select", "EXPLAIN (ANALYZE, FORMAT JSON) SELECT 1", true},
+		{"explain mysql format", "EXPLAIN FORMAT=JSON SELECT 1", true},
+		{"explain mysql analyze insert", "EXPLAIN ANALYZE INSERT INTO t VALUES (1)", false},
+		{"explain bare", "EXPLAIN", false},
+
+		// SELECT ... INTO writes.
+		{"select into table", "SELECT * INTO new_t FROM t", false},
+		{"select into outfile", "SELECT * FROM t INTO OUTFILE '/tmp/x'", false},
+		{"select into after comment", "SELECT 1/**/INTO t", false},
+		{"select into in string", "SELECT 'INTO' AS word", true},
+		{"cte tail select into", "WITH c AS (SELECT 1) SELECT * INTO t FROM c", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

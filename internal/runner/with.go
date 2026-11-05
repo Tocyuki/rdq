@@ -102,8 +102,8 @@ func readSQLIdentifier(sql string, i int) (int, bool) {
 	if i >= len(sql) {
 		return 0, false
 	}
-	if sql[i] == '"' {
-		return skipSQLDoubleQuoted(sql, i)
+	if sql[i] == '"' || sql[i] == '`' {
+		return skipSQLQuoted(sql, i, sql[i])
 	}
 	j := i
 	for j < len(sql) && isSQLIdentByte(sql[j]) {
@@ -127,81 +127,30 @@ func consumeSQLKeyword(sql string, i int, kw string) (int, bool) {
 	return j, true
 }
 
+// scanSQLBalanced returns the index of the `)` matching the `(` at
+// sql[start], skipping comments and quoted tokens. Unterminated input
+// returns ok=false so callers fail closed.
 func scanSQLBalanced(sql string, start int) (int, bool) {
 	if start >= len(sql) || sql[start] != '(' {
 		return 0, false
 	}
 	depth := 0
-	for i := start; i < len(sql); i++ {
-		switch {
-		case strings.HasPrefix(sql[i:], "--"):
-			i += 2
-			for i < len(sql) && sql[i] != '\n' {
-				i++
-			}
-		case strings.HasPrefix(sql[i:], "/*"):
-			i += 2
-			for i+1 < len(sql) && !(sql[i] == '*' && sql[i+1] == '/') {
-				i++
-			}
-			if i+1 >= len(sql) {
+	for i := start; i < len(sql); {
+		if next, skipped, terminated := skipSQLNoiseAt(sql, i); skipped {
+			if !terminated {
 				return 0, false
 			}
-			i++
-		case sql[i] == '\'':
-			next, ok := skipSQLSingleQuoted(sql, i)
-			if !ok {
-				return 0, false
-			}
-			i = next - 1
-		case sql[i] == '"':
-			next, ok := skipSQLDoubleQuoted(sql, i)
-			if !ok {
-				return 0, false
-			}
-			i = next - 1
-		case sql[i] == '(':
+			i = next
+			continue
+		}
+		switch sql[i] {
+		case '(':
 			depth++
-		case sql[i] == ')':
+		case ')':
 			depth--
 			if depth == 0 {
 				return i, true
 			}
-		}
-	}
-	return 0, false
-}
-
-func skipSQLSingleQuoted(sql string, i int) (int, bool) {
-	if i >= len(sql) || sql[i] != '\'' {
-		return 0, false
-	}
-	i++
-	for i < len(sql) {
-		if sql[i] == '\'' {
-			if i+1 < len(sql) && sql[i+1] == '\'' {
-				i += 2
-				continue
-			}
-			return i + 1, true
-		}
-		i++
-	}
-	return 0, false
-}
-
-func skipSQLDoubleQuoted(sql string, i int) (int, bool) {
-	if i >= len(sql) || sql[i] != '"' {
-		return 0, false
-	}
-	i++
-	for i < len(sql) {
-		if sql[i] == '"' {
-			if i+1 < len(sql) && sql[i+1] == '"' {
-				i += 2
-				continue
-			}
-			return i + 1, true
 		}
 		i++
 	}

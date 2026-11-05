@@ -56,7 +56,7 @@ positional `SQL`, `--file <path>`, or `--file -` (stdin) must be provided.
 | `SQL` (positional) | — | The SQL statement. Mutually exclusive with `--file`. |
 | `-f`, `--file <path>` | — | Read SQL from a file. Use `-` for stdin. |
 | `-o`, `--output <fmt>` | `table` | One of `table`, `json`, `csv`. |
-| `-y`, `--yes` | `false` | Skip the destructive-statement confirmation prompt. **Required in non-interactive shells (this skill) for DELETE/UPDATE without WHERE and TRUNCATE.** |
+| `-y`, `--yes` | `false` | Skip the destructive-statement confirmation prompt. **Required in non-interactive shells (this skill) for DELETE/UPDATE without WHERE, TRUNCATE, and multi-statement input.** |
 
 Inherited global flags (rarely needed in this skill — defaults from
 `~/.rdq/state.json` are usually correct):
@@ -123,7 +123,13 @@ Each AWS profile has a tri-state read-only flag in `~/.rdq/state.json`:
 
 - **Unset (fresh profile)** → defaults to **read-only ON**.
 - **Explicit ON** → only `SELECT`, `WITH`, `SHOW`, `EXPLAIN`, `DESCRIBE`,
-  `DESC`, `TABLE`, `VALUES` may execute.
+  `DESC`, `TABLE`, `VALUES` may execute, with these extra rules:
+  - `EXPLAIN <stmt>` is allowed only when `<stmt>` itself is read-only
+    (`EXPLAIN ANALYZE DELETE ...` executes the DELETE, so it is blocked).
+    MySQL's `EXPLAIN <table>` shorthand is blocked too — use `DESCRIBE <table>`.
+  - `SELECT ... INTO ...` (creates a table / writes a file or variables) is blocked.
+  - Every `;`-separated statement must be read-only (`SELECT 1; DELETE FROM t`
+    is blocked).
 - **Explicit OFF** → all statements allowed.
 
 When read-only is ON and the SQL is a write, `rdq exec` exits **3** without
@@ -144,8 +150,12 @@ flag:
 - `UPDATE` without a `WHERE` clause
 - `TRUNCATE`
 - `WITH ... DELETE/UPDATE` without a `WHERE` (conservative default)
+- Any input with more than one `;`-separated statement
 
-The classifier strips comments and string literals first, so
+Only a top-level `WHERE` counts: `UPDATE t SET c = (SELECT ... WHERE ...)`
+still rewrites every row and requires confirmation. The classifier strips
+comments, string literals, quoted identifiers (`"..."`, `` `...` ``) and
+PostgreSQL dollar-quoted strings first, so
 `UPDATE t SET note = '-- not a comment'` is correctly classified as
 "missing WHERE".
 
@@ -176,7 +186,8 @@ rdq exec -f migrations/2026-04-add-index.sql
 
 The Data API accepts a single statement per call. If the file contains
 multiple `;`-separated statements, run them one at a time (the user should
-split the file or invoke `rdq exec` in a loop).
+split the file or invoke `rdq exec` in a loop). A multi-statement input is
+always treated as needing confirmation, so without `--yes` it exits **4**.
 
 ### Pipe SQL via stdin
 
