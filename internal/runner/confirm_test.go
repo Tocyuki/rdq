@@ -46,6 +46,13 @@ func TestNeedsConfirmation(t *testing.T) {
 		{"update where in backtick id", "UPDATE t SET `WHERE` = 1", true, "UPDATE without a WHERE"},
 		{"update bind placeholder is not dollar quote", "UPDATE t SET c = $1 WHERE id = $2", false, ""},
 
+		// Dialect differentials
+		{"mysql backslash hides where", `UPDATE t SET c = 'a\'' -- ' WHERE id = 1`, true, "UPDATE without a WHERE"},
+		// Under PostgreSQL rules this WHERE is a comment, so confirm.
+		{"mysql executable comment where", "DELETE FROM t /*! WHERE id = 1 */", true, "DELETE without a WHERE"},
+		{"mysql hash comment hides where", "UPDATE t SET c = 1 # WHERE id = 1", true, "UPDATE without a WHERE"},
+		{"mysql double dash is minus", "DELETE FROM t WHERE x = 1 --1", false, ""},
+
 		// Multiple statements
 		{"select then delete", "SELECT 1; DELETE FROM t", true, "DELETE without a WHERE"},
 		{"two safe statements still confirm", "SELECT 1; SELECT 2", true, "Multiple statements"},
@@ -95,7 +102,7 @@ func TestStripSQLNoise(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := stripSQLNoise(tc.in)
+			got := stripSQLNoise(dialectPostgres, tc.in)
 			if got != tc.want {
 				t.Errorf("stripSQLNoise(%q) = %q, want %q", tc.in, got, tc.want)
 			}

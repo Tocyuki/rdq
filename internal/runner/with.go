@@ -7,60 +7,60 @@ import "strings"
 // emit and inspect (optional RECURSIVE, optional column lists, optional
 // MATERIALIZED / NOT MATERIALIZED). If parsing fails, ok=false and callers
 // should fall back to the conservative path.
-func splitLeadingWith(sql string) (cteBodies []string, tail string, ok bool) {
-	i := skipSQLSpaceAndComments(sql, 0)
-	next, ok := consumeSQLKeyword(sql, i, "WITH")
+func splitLeadingWith(d dialect, sql string) (cteBodies []string, tail string, ok bool) {
+	i := skipSQLSpaceAndComments(d, sql, 0)
+	next, ok := consumeSQLKeyword(d, sql, i, "WITH")
 	if !ok {
 		return nil, "", false
 	}
-	i = skipSQLSpaceAndComments(sql, next)
-	if next, ok := consumeSQLKeyword(sql, i, "RECURSIVE"); ok {
+	i = skipSQLSpaceAndComments(d, sql, next)
+	if next, ok := consumeSQLKeyword(d, sql, i, "RECURSIVE"); ok {
 		i = next
 	}
 
 	for {
-		i = skipSQLSpaceAndComments(sql, i)
-		next, ok := readSQLIdentifier(sql, i)
+		i = skipSQLSpaceAndComments(d, sql, i)
+		next, ok := readSQLIdentifier(d, sql, i)
 		if !ok {
 			return nil, "", false
 		}
-		i = skipSQLSpaceAndComments(sql, next)
+		i = skipSQLSpaceAndComments(d, sql, next)
 
 		// Optional column list after the CTE name.
 		if i < len(sql) && sql[i] == '(' {
-			end, ok := scanSQLBalanced(sql, i)
+			end, ok := scanSQLBalanced(d, sql, i)
 			if !ok {
 				return nil, "", false
 			}
-			i = skipSQLSpaceAndComments(sql, end+1)
+			i = skipSQLSpaceAndComments(d, sql, end+1)
 		}
 
-		next, ok = consumeSQLKeyword(sql, i, "AS")
+		next, ok = consumeSQLKeyword(d, sql, i, "AS")
 		if !ok {
 			return nil, "", false
 		}
-		i = skipSQLSpaceAndComments(sql, next)
+		i = skipSQLSpaceAndComments(d, sql, next)
 
-		if next, ok := consumeSQLKeyword(sql, i, "NOT"); ok {
-			i = skipSQLSpaceAndComments(sql, next)
-			next, ok = consumeSQLKeyword(sql, i, "MATERIALIZED")
+		if next, ok := consumeSQLKeyword(d, sql, i, "NOT"); ok {
+			i = skipSQLSpaceAndComments(d, sql, next)
+			next, ok = consumeSQLKeyword(d, sql, i, "MATERIALIZED")
 			if !ok {
 				return nil, "", false
 			}
-			i = skipSQLSpaceAndComments(sql, next)
-		} else if next, ok := consumeSQLKeyword(sql, i, "MATERIALIZED"); ok {
-			i = skipSQLSpaceAndComments(sql, next)
+			i = skipSQLSpaceAndComments(d, sql, next)
+		} else if next, ok := consumeSQLKeyword(d, sql, i, "MATERIALIZED"); ok {
+			i = skipSQLSpaceAndComments(d, sql, next)
 		}
 
 		if i >= len(sql) || sql[i] != '(' {
 			return nil, "", false
 		}
-		end, ok := scanSQLBalanced(sql, i)
+		end, ok := scanSQLBalanced(d, sql, i)
 		if !ok {
 			return nil, "", false
 		}
 		cteBodies = append(cteBodies, sql[i+1:end])
-		i = skipSQLSpaceAndComments(sql, end+1)
+		i = skipSQLSpaceAndComments(d, sql, end+1)
 
 		if i < len(sql) && sql[i] == ',' {
 			i++
@@ -70,40 +70,31 @@ func splitLeadingWith(sql string) (cteBodies []string, tail string, ok bool) {
 	}
 }
 
-func skipSQLSpaceAndComments(sql string, i int) int {
+func skipSQLSpaceAndComments(d dialect, sql string, i int) int {
 	for i < len(sql) {
-		switch {
-		case strings.HasPrefix(sql[i:], "--"):
-			i += 2
-			for i < len(sql) && sql[i] != '\n' {
-				i++
-			}
-		case strings.HasPrefix(sql[i:], "/*"):
-			i += 2
-			for i+1 < len(sql) && !(sql[i] == '*' && sql[i+1] == '/') {
-				i++
-			}
-			if i+1 < len(sql) {
-				i += 2
-			} else {
-				return len(sql)
-			}
-		case isSQLSpace(sql[i]):
+		if isSQLSpace(sql[i]) {
 			i++
-		default:
+			continue
+		}
+		next, skipped, terminated := skipSQLCommentAt(d, sql, i)
+		if !skipped {
 			return i
 		}
+		if !terminated {
+			return len(sql)
+		}
+		i = next
 	}
 	return i
 }
 
-func readSQLIdentifier(sql string, i int) (int, bool) {
-	i = skipSQLSpaceAndComments(sql, i)
+func readSQLIdentifier(d dialect, sql string, i int) (int, bool) {
+	i = skipSQLSpaceAndComments(d, sql, i)
 	if i >= len(sql) {
 		return 0, false
 	}
 	if sql[i] == '"' || sql[i] == '`' {
-		return skipSQLQuoted(sql, i, sql[i])
+		return skipSQLQuoted(sql, i, sql[i], false)
 	}
 	j := i
 	for j < len(sql) && isSQLIdentByte(sql[j]) {
@@ -112,8 +103,8 @@ func readSQLIdentifier(sql string, i int) (int, bool) {
 	return j, j > i
 }
 
-func consumeSQLKeyword(sql string, i int, kw string) (int, bool) {
-	i = skipSQLSpaceAndComments(sql, i)
+func consumeSQLKeyword(d dialect, sql string, i int, kw string) (int, bool) {
+	i = skipSQLSpaceAndComments(d, sql, i)
 	j := i
 	for j < len(sql) && isSQLWordByte(sql[j]) {
 		j++
@@ -130,13 +121,13 @@ func consumeSQLKeyword(sql string, i int, kw string) (int, bool) {
 // scanSQLBalanced returns the index of the `)` matching the `(` at
 // sql[start], skipping comments and quoted tokens. Unterminated input
 // returns ok=false so callers fail closed.
-func scanSQLBalanced(sql string, start int) (int, bool) {
+func scanSQLBalanced(d dialect, sql string, start int) (int, bool) {
 	if start >= len(sql) || sql[start] != '(' {
 		return 0, false
 	}
 	depth := 0
 	for i := start; i < len(sql); {
-		if next, skipped, terminated := skipSQLNoiseAt(sql, i); skipped {
+		if next, skipped, terminated := skipSQLNoiseAt(d, sql, i); skipped {
 			if !terminated {
 				return 0, false
 			}

@@ -60,7 +60,24 @@ func TestIsReadOnlySQL(t *testing.T) {
 		{"select then drop", "select 1;drop table t", false},
 		{"semicolon inside string", "SELECT ';DELETE FROM t'", true},
 		{"semicolon inside comment", "SELECT 1 /* ; DELETE FROM t */", true},
-		{"semicolon inside dollar quote", "SELECT $$;DELETE FROM t$$", true},
+		// MySQL has no dollar quotes, so there this is two statements.
+		{"semicolon inside dollar quote", "SELECT $$;DELETE FROM t$$", false},
+		{"dollar quote without semicolon", "SELECT $$it's fine$$", true},
+
+		// Dialect differentials: what one engine lexes as a comment or
+		// string must not hide code the other engine executes.
+		{"mysql executable comment", "SELECT 1 /*! INTO OUTFILE '/tmp/x' */", false},
+		{"mariadb executable comment", "SELECT 1 /*M!100100 INTO OUTFILE '/tmp/x' */", false},
+		{"mysql versioned executable comment", "SELECT 1 /*!50100 INTO @v */", false},
+		{"optimizer hint is a comment", "SELECT /*+ MAX_EXECUTION_TIME(1000) */ 1", true},
+		{"mysql backslash escape", `SELECT 'a\'' INTO OUTFILE '/tmp/x' -- '`, false},
+		{"mysql backslash in double quotes", `SELECT "a\"" INTO OUTFILE '/tmp/x' -- "`, false},
+		{"postgres E string", `SELECT E'a\'' INTO t -- '`, false},
+		{"mysql double dash without space", "SELECT 1 --1 INTO OUTFILE '/tmp/x'", false},
+		{"mysql hash comment hides quote", "SELECT 1 # '\nINTO OUTFILE '/tmp/x' -- '", false},
+		{"backslash in literal is fine", `SELECT * FROM t WHERE name LIKE 'a\_b'`, true},
+		{"windows path literal", `SELECT 'C:\temp\x'`, true},
+		{"hash comment", "# note\nSELECT 1", false}, // PostgreSQL has no # comments
 
 		// EXPLAIN is only as read-only as the statement it explains.
 		{"explain analyze select", "EXPLAIN ANALYZE SELECT 1", true},

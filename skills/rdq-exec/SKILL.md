@@ -130,6 +130,9 @@ Each AWS profile has a tri-state read-only flag in `~/.rdq/state.json`:
   - `SELECT ... INTO ...` (creates a table / writes a file or variables) is blocked.
   - Every `;`-separated statement must be read-only (`SELECT 1; DELETE FROM t`
     is blocked).
+  - The checks run under both PostgreSQL and MySQL lexing rules, so MySQL
+    `/*! ... */` executable comments are treated as code and statements that
+    only parse safely under one engine are blocked.
 - **Explicit OFF** → all statements allowed.
 
 When read-only is ON and the SQL is a write, `rdq exec` exits **3** without

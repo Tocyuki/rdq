@@ -61,7 +61,7 @@ The `gui` subcommand exposes a browser-based SQL client (React + Vite SPA embedd
 
 Both modes share the same guards so destructive SQL is hard to run by accident:
 
-- **Read-only mode** (default **on** for fresh profiles) — only `SELECT` / `WITH` / `SHOW` / `EXPLAIN` / `DESCRIBE` / `DESC` / `TABLE` / `VALUES` can execute. Everything else is rejected before the request reaches AWS. `EXPLAIN` is allowed only when the explained statement is itself read-only (`EXPLAIN ANALYZE` executes it; use `DESCRIBE` instead of MySQL's `EXPLAIN <table>`), `SELECT ... INTO` is rejected, and every `;`-separated statement must pass.
+- **Read-only mode** (default **on** for fresh profiles) — only `SELECT` / `WITH` / `SHOW` / `EXPLAIN` / `DESCRIBE` / `DESC` / `TABLE` / `VALUES` can execute. Everything else is rejected before the request reaches AWS. `EXPLAIN` is allowed only when the explained statement is itself read-only (`EXPLAIN ANALYZE` executes it; use `DESCRIBE` instead of MySQL's `EXPLAIN <table>`), `SELECT ... INTO` is rejected, and every `;`-separated statement must pass. Statements are checked under both PostgreSQL and MySQL lexing rules, so MySQL-only constructs (`/*! ... */` executable comments, backslash escapes, `#` comments) cannot hide a write.
   - TUI: toggle with **`F8`**; the status bar shows a **`RO`** marker when it is on.
   - GUI: toggle in **Settings**; the connection bar shows a **Read-only** badge (or **Allow writes** when off).
 - **Production environment flag** — per profile. When set, the GUI connection bar flips to a warning colour and the TUI shows a matching indicator, so destructive statements stand out visually before you run them.
