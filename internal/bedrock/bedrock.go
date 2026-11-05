@@ -20,6 +20,10 @@ import (
 	rttypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
+// ErrTruncated reports that the model stopped because it hit the
+// max-token limit, so the reply is incomplete.
+var ErrTruncated = errors.New("bedrock response was truncated at the max token limit; try a narrower request")
+
 // Client groups the two Bedrock SDK clients we need: the management client
 // for listing models and the runtime client for actually invoking them.
 type Client struct {
@@ -152,9 +156,20 @@ func (c *Client) Ask(ctx context.Context, modelID, systemPrompt string, messages
 // Explain sends a multi-turn conversation and returns the raw text
 // untouched, so the response can include markdown bullet lists and ```sql
 // fenced examples for the error analysis viewport.
+//
+// Unlike Ask, a reply truncated at the token limit is still returned (with
+// a trailing note): a partial prose explanation is useful, whereas partial
+// SQL is dangerous.
 func (c *Client) Explain(ctx context.Context, modelID, systemPrompt string, messages []Message) (string, error) {
-	return c.converse(ctx, modelID, systemPrompt, messages)
+	out, err := c.converse(ctx, modelID, systemPrompt, messages)
+	if errors.Is(err, ErrTruncated) && strings.TrimSpace(out) != "" {
+		return out + truncatedNote, nil
+	}
+	return out, err
 }
+
+// truncatedNote is appended to prose replies that hit the token limit.
+const truncatedNote = "\n\n_(response truncated at the token limit)_"
 
 // converse is the shared transport behind Ask and Explain. It serializes
 // the supplied conversation into Bedrock's Converse Messages format and
@@ -200,6 +215,15 @@ func (c *Client) converse(ctx context.Context, modelID, systemPrompt string, mes
 		return "", fmt.Errorf("bedrock converse: %w", err)
 	}
 
+	return converseReplyText(out)
+}
+
+// converseReplyText extracts the assistant's text from a Converse response,
+// rejecting replies that are empty, truncated, or blocked.
+func converseReplyText(out *bedrockruntime.ConverseOutput) (string, error) {
+	if out == nil {
+		return "", errors.New("bedrock returned no output")
+	}
 	msg, ok := out.Output.(*rttypes.ConverseOutputMemberMessage)
 	if !ok {
 		return "", errors.New("bedrock returned an unexpected output variant")
@@ -208,11 +232,28 @@ func (c *Client) converse(ctx context.Context, modelID, systemPrompt string, mes
 		return "", errors.New("bedrock returned an empty response")
 	}
 
+	// A reply blocked by a safety filter is not a usable answer. A reply
+	// cut off by the token cap is reported via ErrTruncated so a truncated
+	// SQL statement never reaches the editor (or the auto-run path) as if
+	// it were complete.
+	switch out.StopReason {
+	case rttypes.StopReasonContentFiltered, rttypes.StopReasonGuardrailIntervened:
+		return "", fmt.Errorf("bedrock response was blocked (stop reason: %s)", out.StopReason)
+	}
+
 	var sb strings.Builder
 	for _, block := range msg.Value.Content {
 		if t, ok := block.(*rttypes.ContentBlockMemberText); ok {
 			sb.WriteString(t.Value)
 		}
+	}
+	if out.StopReason == rttypes.StopReasonMaxTokens {
+		// Return the partial text alongside the sentinel so prose callers
+		// (Explain) can still show it; Ask surfaces the error instead.
+		return sb.String(), ErrTruncated
+	}
+	if strings.TrimSpace(sb.String()) == "" {
+		return "", errors.New("bedrock returned a response with no text content")
 	}
 	return sb.String(), nil
 }
