@@ -28,7 +28,11 @@ func RenderTable(w io.Writer, r *Result) error {
 	if _, err := fmt.Fprintln(w, sep); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, buildDataRow(r.Columns, widths, nil)); err != nil {
+	headers := make([]string, len(r.Columns))
+	for i, c := range r.Columns {
+		headers[i] = EscapeControl(c)
+	}
+	if _, err := fmt.Fprintln(w, buildDataRow(headers, widths, nil)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w, sep); err != nil {

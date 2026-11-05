@@ -165,7 +165,7 @@ func FormatCell(v any) string {
 	}
 	switch val := v.(type) {
 	case string:
-		return val
+		return EscapeControl(val)
 	case int64:
 		return strconv.FormatInt(val, 10)
 	case float64:
@@ -177,7 +177,46 @@ func FormatCell(v any) string {
 	case []any:
 		return formatArray(val)
 	}
-	return fmt.Sprintf("%v", v)
+	return EscapeControl(fmt.Sprintf("%v", v))
+}
+
+// EscapeControl makes C0 / C1 control characters (ESC, BEL, CR, ...) and
+// DEL visible as Go-style escapes (`\n`, `\t`, `\x1b`, `\u009b`) for
+// terminal display. Database values are untrusted: printed raw, an ESC or
+// OSC sequence in a cell could rewrite the screen, set the window title or
+// write the clipboard (OSC 52), and newlines / tabs break table layout.
+// Only display paths use this — CSV / JSON exports keep the raw value.
+func EscapeControl(s string) string {
+	if !strings.ContainsFunc(s, isControlRune) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		if !isControlRune(r) {
+			b.WriteRune(r)
+			continue
+		}
+		switch r {
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x80 {
+				fmt.Fprintf(&b, `\x%02x`, r)
+			} else {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			}
+		}
+	}
+	return b.String()
+}
+
+func isControlRune(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
 }
 
 func formatArray(arr []any) string {
@@ -201,7 +240,7 @@ func formatArray(arr []any) string {
 func ColumnWidths(columns []string, rows [][]any) []int {
 	widths := make([]int, len(columns))
 	for i, c := range columns {
-		widths[i] = DisplayWidth(c)
+		widths[i] = DisplayWidth(EscapeControl(c))
 	}
 	for _, row := range rows {
 		for i, cell := range row {

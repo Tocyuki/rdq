@@ -1462,6 +1462,7 @@ func (m *Model) refreshTable() {
 	visible := m.result.Columns[start:end]
 	cols := make([]table.Column, len(visible))
 	for i, c := range visible {
+		c = runner.EscapeControl(c)
 		title := "  " + c
 		if start+i == m.colCursor {
 			// Mark the cursor column so the user can see where it is

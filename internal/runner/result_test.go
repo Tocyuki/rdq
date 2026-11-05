@@ -531,3 +531,31 @@ func TestExportCSVCollisionAddsSuffix(t *testing.T) {
 		t.Errorf("expected unique filenames, both = %s", first)
 	}
 }
+
+func TestEscapeControl(t *testing.T) {
+	cases := map[string]string{
+		"plain 日本語":              "plain 日本語",
+		"a\nb\tc\rd":             `a\nb\tc\rd`,
+		"\x1b]52;c;ZXZpbA==\x07": `\x1b]52;c;ZXZpbA==\x07`,
+		"\x1b[2Jclear":           `\x1b[2Jclear`,
+		"del\x7f":                `del\x7f`,
+		"c1\u009b31m":            `c1\u009b31m`,
+	}
+	for in, want := range cases {
+		if got := EscapeControl(in); got != want {
+			t.Errorf("EscapeControl(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Display formatting escapes; exports keep the raw value.
+	res := &Result{Columns: []string{"v"}, Rows: [][]any{{"x\x1b[31my"}}}
+	if got := FormatCell(res.Rows[0][0]); got != `x\x1b[31my` {
+		t.Errorf("FormatCell should escape ESC, got %q", got)
+	}
+	var csv strings.Builder
+	if err := res.WriteCSV(&csv); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(csv.String(), "x\x1b[31my") {
+		t.Errorf("CSV export must keep the raw value, got %q", csv.String())
+	}
+}
