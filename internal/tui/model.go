@@ -3410,15 +3410,9 @@ func (m *Model) persistIsProduction(value bool) error {
 	if m.target.profile == "" {
 		return nil
 	}
-	st, err := state.Load()
-	if err != nil {
-		return err
-	}
-	ps := st.Get(m.target.profile)
-	v := value
-	ps.IsProduction = &v
-	st.Set(m.target.profile, ps)
-	return st.Save()
+	return state.UpdateProfile(m.target.profile, func(ps *state.ProfileState) {
+		ps.IsProduction = &value
+	})
 }
 
 // loadProductionFlag re-reads the IsProduction flag from the state file
@@ -3579,22 +3573,18 @@ func (m *Model) persistTarget() error {
 	if m.target.profile == "" {
 		return nil
 	}
-	st, err := state.Load()
-	if err != nil {
-		return err
-	}
-	ps := st.Get(m.target.profile)
-	ps.Cluster = m.target.cluster
-	ps.Secret = m.target.secret
-	ps.Database = m.target.database
-	if ps.ClusterSecrets == nil {
-		ps.ClusterSecrets = map[string]string{}
-	}
-	if m.target.cluster != "" && m.target.secret != "" {
-		ps.ClusterSecrets[m.target.cluster] = m.target.secret
-	}
-	st.Set(m.target.profile, ps)
-	return st.Save()
+	tgt := m.target
+	return state.UpdateProfile(tgt.profile, func(ps *state.ProfileState) {
+		ps.Cluster = tgt.cluster
+		ps.Secret = tgt.secret
+		ps.Database = tgt.database
+		if ps.ClusterSecrets == nil {
+			ps.ClusterSecrets = map[string]string{}
+		}
+		if tgt.cluster != "" && tgt.secret != "" {
+			ps.ClusterSecrets[tgt.cluster] = tgt.secret
+		}
+	})
 }
 
 // continuePending resumes whatever flow was queued behind the model /
@@ -3665,15 +3655,11 @@ func (m *Model) persistBedrockSettings() error {
 	if m.target.profile == "" {
 		return nil
 	}
-	st, err := state.Load()
-	if err != nil {
-		return err
-	}
-	ps := st.Get(m.target.profile)
-	ps.BedrockModel = m.bedrockModel
-	ps.BedrockLanguage = m.bedrockLanguage
-	st.Set(m.target.profile, ps)
-	return st.Save()
+	model, lang := m.bedrockModel, m.bedrockLanguage
+	return state.UpdateProfile(m.target.profile, func(ps *state.ProfileState) {
+		ps.BedrockModel = model
+		ps.BedrockLanguage = lang
+	})
 }
 
 // loadReadOnlyFlag hydrates m.isReadOnly from state.json for the active
@@ -3725,15 +3711,9 @@ func (m *Model) persistIsReadOnly(value bool) error {
 	if m.target.profile == "" {
 		return nil
 	}
-	st, err := state.Load()
-	if err != nil {
-		return err
-	}
-	ps := st.Get(m.target.profile)
-	v := value
-	ps.IsReadOnly = &v
-	st.Set(m.target.profile, ps)
-	return st.Save()
+	return state.UpdateProfile(m.target.profile, func(ps *state.ProfileState) {
+		ps.IsReadOnly = &value
+	})
 }
 
 // startRun is the common execution kickoff called by both the direct

@@ -239,22 +239,21 @@ func resolveConnection(ctx context.Context, cfg aws.Config, profile string, glob
 		return nil
 	}
 
-	cached.Cluster = cluster.ARN
-	cached.Secret = secret
-	cached.Database = database
-	if cached.ClusterSecrets == nil {
-		cached.ClusterSecrets = map[string]string{}
-	}
-	if cluster.ARN != "" && secret != "" {
-		cached.ClusterSecrets[cluster.ARN] = secret
-	}
-	st, err := state.Load()
+	// Only the fields resolved here are written; UpdateProfile re-reads
+	// the file under the state lock so anything another rdq process
+	// changed since `cached` was loaded is preserved.
+	err = state.UpdateProfile(profile, func(ps *state.ProfileState) {
+		ps.Cluster = cluster.ARN
+		ps.Secret = secret
+		ps.Database = database
+		if ps.ClusterSecrets == nil {
+			ps.ClusterSecrets = map[string]string{}
+		}
+		if cluster.ARN != "" && secret != "" {
+			ps.ClusterSecrets[cluster.ARN] = secret
+		}
+	})
 	if err != nil {
-		log.Printf("rdq state save skipped (load failed): %v", err)
-		return nil
-	}
-	st.Set(profile, cached)
-	if err := st.Save(); err != nil {
 		log.Printf("rdq state save failed: %v", err)
 	}
 	return nil

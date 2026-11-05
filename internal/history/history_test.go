@@ -1,8 +1,12 @@
 package history
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -328,5 +332,90 @@ func TestAppendTrimsWhitespaceForDedup(t *testing.T) {
 	}
 	if !got[0].At.Equal(at2) {
 		t.Errorf("expected newest timestamp, got %v", got[0].At)
+	}
+}
+
+// TestConcurrentAppendsFromSeparateStores simulates several rdq processes
+// (each with its own Store) appending at once; none may be lost.
+func TestConcurrentAppendsFromSeparateStores(t *testing.T) {
+	setHistoryPath(t)
+	const n = 40
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			store, err := New()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := store.Append(Entry{Profile: "p", Database: "d", SQL: fmt.Sprintf("SELECT %d", i), At: time.Now(), Ok: true}); err != nil {
+				t.Error(err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	store, _ := New()
+	got, err := store.Load("p", "d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != n {
+		t.Fatalf("got %d entries, want %d (lost updates)", len(got), n)
+	}
+}
+
+func TestRewritePreservesUnparseableLines(t *testing.T) {
+	store := setHistoryPath(t)
+	garbage := `{"profile": 123, "this": "is from a future rdq"}`
+	if err := os.WriteFile(store.Path(), []byte(garbage+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(Entry{Profile: "p", Database: "d", SQL: "SELECT 1", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(store.Path())
+	if !strings.Contains(string(data), garbage) {
+		t.Fatalf("unparseable line was dropped on rewrite:\n%s", data)
+	}
+}
+
+func TestLoadHandlesVeryLongLines(t *testing.T) {
+	store := setHistoryPath(t)
+	huge := "SELECT '" + strings.Repeat("x", 9*1024*1024) + "'"
+	if err := store.Append(Entry{Profile: "p", Database: "d", SQL: huge, At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(Entry{Profile: "p", Database: "d", SQL: "SELECT 2", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load("p", "d")
+	if err != nil {
+		t.Fatalf("Load with a >8MiB line: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d entries, want 2", len(got))
+	}
+}
+
+func TestRecord(t *testing.T) {
+	store := setHistoryPath(t)
+	if err := store.Record("", "d", "SELECT 1", nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.Path()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ephemeral (empty profile) Record must not touch disk")
+	}
+	if err := store.Record("p", "d", "DELETE FROM t", errors.New("boom"), 5*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.Load("p", "d")
+	if len(got) != 1 || got[0].Ok || got[0].ErrorMsg != "boom" || got[0].DurationMS != 5 {
+		t.Fatalf("unexpected entry: %+v", got)
+	}
+	var nilStore *Store
+	if err := nilStore.Record("p", "d", "x", nil, 0); err != nil {
+		t.Fatalf("nil store Record should be a no-op, got %v", err)
 	}
 }

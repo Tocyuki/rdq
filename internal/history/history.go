@@ -10,13 +10,17 @@ package history
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Tocyuki/rdq/internal/fsutil"
 )
 
 // Entry is one recorded statement execution.
@@ -63,27 +67,55 @@ func (s *Store) Path() string { return s.path }
 // The implementation is O(n) on disk because the JSONL log is rewritten in
 // place (via the same tempfile+rename path SetFavorite uses). Histories
 // are typically small (< a few thousand lines) so the cost is negligible,
-// and the tradeoff buys simple in-order recall by Load.
+// and the tradeoff buys simple in-order recall by Load. The whole
+// read-modify-write runs under an inter-process lock so a TUI, the GUI
+// server and `rdq exec` appending at the same time never drop each
+// other's entries.
 func (s *Store) Append(e Entry) error {
-	existing, err := s.loadAll()
-	if err != nil {
-		return err
-	}
-	needle := strings.TrimSpace(e.SQL)
-	kept := make([]Entry, 0, len(existing)+1)
-	for _, old := range existing {
-		if old.Profile == e.Profile &&
-			old.Database == e.Database &&
-			strings.TrimSpace(old.SQL) == needle {
-			if old.Favorite {
-				e.Favorite = true
-			}
-			continue
+	return fsutil.WithLock(s.path, func() error {
+		lines, err := s.readLines()
+		if err != nil {
+			return err
 		}
-		kept = append(kept, old)
+		needle := strings.TrimSpace(e.SQL)
+		kept := make([]line, 0, len(lines)+1)
+		for _, l := range lines {
+			if old := l.entry; old != nil &&
+				old.Profile == e.Profile &&
+				old.Database == e.Database &&
+				strings.TrimSpace(old.SQL) == needle {
+				if old.Favorite {
+					e.Favorite = true
+				}
+				continue
+			}
+			kept = append(kept, l)
+		}
+		kept = append(kept, line{entry: &e})
+		return s.writeLines(kept)
+	})
+}
+
+// Record appends the outcome of one statement execution. It is the single
+// place the TUI, GUI and CLI build history entries from, so all surfaces
+// record identical fields. Ephemeral mode (empty profile) is a no-op: direct
+// credentials runs leave no on-disk trace.
+func (s *Store) Record(profile, database, sql string, execErr error, elapsed time.Duration) error {
+	if s == nil || profile == "" {
+		return nil
 	}
-	kept = append(kept, e)
-	return s.rewriteAll(kept)
+	entry := Entry{
+		Profile:    profile,
+		Database:   database,
+		SQL:        sql,
+		At:         time.Now(),
+		Ok:         execErr == nil,
+		DurationMS: elapsed.Milliseconds(),
+	}
+	if execErr != nil {
+		entry.ErrorMsg = execErr.Error()
+	}
+	return s.Append(entry)
 }
 
 // Load returns entries matching the given profile and database, ordered with
@@ -91,36 +123,15 @@ func (s *Store) Append(e Entry) error {
 // slice. Lines that fail to parse are skipped so that a single bad line cannot
 // break recall.
 func (s *Store) Load(profile, database string) ([]Entry, error) {
-	f, err := os.Open(s.path)
+	lines, err := s.readLines()
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("open history file: %w", err)
+		return nil, err
 	}
-	defer f.Close()
-
 	var out []Entry
-	scanner := bufio.NewScanner(f)
-	// Allow long SQL statements; default 64 KiB per line is too small for
-	// users pasting in real workloads.
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	for _, l := range lines {
+		if l.entry != nil && l.entry.Profile == profile && l.entry.Database == database {
+			out = append(out, *l.entry)
 		}
-		var e Entry
-		if err := json.Unmarshal(line, &e); err != nil {
-			continue
-		}
-		if e.Profile != profile || e.Database != database {
-			continue
-		}
-		out = append(out, e)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan history file: %w", err)
 	}
 	reverse(out)
 	return out, nil
@@ -128,32 +139,45 @@ func (s *Store) Load(profile, database string) ([]Entry, error) {
 
 // SetFavorite toggles the Favorite flag on the entry whose At timestamp
 // matches the given time (within nanosecond precision). The whole JSONL
-// file is rewritten atomically (tempfile + rename) because the format is
-// append-only and there is no random-access slot for a single field.
+// file is rewritten atomically (tempfile + rename) under the history lock
+// because the format is append-only and there is no random-access slot
+// for a single field.
 //
 // Entries from other profiles / databases are preserved untouched. If no
 // matching entry is found the function is a no-op (returns nil).
 func (s *Store) SetFavorite(at time.Time, favorite bool) error {
-	entries, err := s.loadAll()
-	if err != nil {
-		return err
-	}
-	matched := false
-	for i := range entries {
-		if entries[i].At.Equal(at) {
-			entries[i].Favorite = favorite
-			matched = true
+	return fsutil.WithLock(s.path, func() error {
+		lines, err := s.readLines()
+		if err != nil {
+			return err
 		}
-	}
-	if !matched {
-		return nil
-	}
-	return s.rewriteAll(entries)
+		matched := false
+		for _, l := range lines {
+			if l.entry != nil && l.entry.At.Equal(at) {
+				l.entry.Favorite = favorite
+				matched = true
+			}
+		}
+		if !matched {
+			return nil
+		}
+		return s.writeLines(lines)
+	})
 }
 
-// loadAll reads every entry from the history file regardless of profile /
-// database. Used internally by SetFavorite to round-trip the whole log.
-func (s *Store) loadAll() ([]Entry, error) {
+// line is one physical line of the history file. entry is nil when the
+// line did not parse; raw then holds it verbatim so a rewrite preserves it
+// instead of silently deleting data (e.g. a line written by a newer rdq
+// with a field type this version does not understand).
+type line struct {
+	entry *Entry
+	raw   []byte
+}
+
+// readLines reads every line of the history file. bufio.Reader (rather
+// than a Scanner) is used so there is no per-line size cap: one huge
+// pasted statement must not make the whole history unreadable.
+func (s *Store) readLines() ([]line, error) {
 	f, err := os.Open(s.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -163,70 +187,44 @@ func (s *Store) loadAll() ([]Entry, error) {
 	}
 	defer f.Close()
 
-	var out []Entry
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	var out []line
+	r := bufio.NewReader(f)
+	for {
+		raw, readErr := r.ReadBytes('\n')
+		raw = bytes.TrimRight(raw, "\r\n")
+		if len(bytes.TrimSpace(raw)) > 0 {
+			var e Entry
+			if err := json.Unmarshal(raw, &e); err != nil {
+				out = append(out, line{raw: raw})
+			} else {
+				out = append(out, line{entry: &e})
+			}
 		}
-		var e Entry
-		if err := json.Unmarshal(line, &e); err != nil {
-			continue
+		if readErr == io.EOF {
+			return out, nil
 		}
-		out = append(out, e)
+		if readErr != nil {
+			return nil, fmt.Errorf("read history file: %w", readErr)
+		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan history file: %w", err)
-	}
-	return out, nil
 }
 
-// rewriteAll writes the supplied slice back to the history file atomically
-// via a tempfile rename. Used by SetFavorite to commit a Favorite toggle.
-func (s *Store) rewriteAll(entries []Entry) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return fmt.Errorf("create history directory: %w", err)
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".history-*.jsonl")
-	if err != nil {
-		return fmt.Errorf("create temp history file: %w", err)
-	}
-	tmpName := tmp.Name()
-	w := bufio.NewWriter(tmp)
-	for _, e := range entries {
-		data, err := json.Marshal(e)
-		if err != nil {
-			tmp.Close()
-			os.Remove(tmpName)
-			return fmt.Errorf("marshal history entry: %w", err)
+// writeLines serializes lines and atomically replaces the history file.
+// Callers must hold the history lock.
+func (s *Store) writeLines(lines []line) error {
+	var buf bytes.Buffer
+	for _, l := range lines {
+		data := l.raw
+		if l.entry != nil {
+			var err error
+			if data, err = json.Marshal(l.entry); err != nil {
+				return fmt.Errorf("marshal history entry: %w", err)
+			}
 		}
-		if _, err := w.Write(append(data, '\n')); err != nil {
-			tmp.Close()
-			os.Remove(tmpName)
-			return fmt.Errorf("write history entry: %w", err)
-		}
+		buf.Write(data)
+		buf.WriteByte('\n')
 	}
-	if err := w.Flush(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("flush history file: %w", err)
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("chmod temp history file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp history file: %w", err)
-	}
-	if err := os.Rename(tmpName, s.path); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename history file: %w", err)
-	}
-	return nil
+	return fsutil.WriteFileAtomic(s.path, buf.Bytes(), 0o600)
 }
 
 func reverse(s []Entry) {
