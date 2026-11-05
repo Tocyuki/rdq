@@ -11,7 +11,6 @@ import (
 	"github.com/Tocyuki/rdq/internal/runner"
 	"github.com/Tocyuki/rdq/internal/state"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
 )
 
 // executeHandlers owns POST /api/execute. It holds collaborators (awsCache,
@@ -21,9 +20,8 @@ type executeHandlers struct {
 	history  *history.Store
 
 	// executeSQL is a seam for tests so the handler can be exercised
-	// without an actual Data API round trip. The default delegates to
-	// runner.ExecuteSQL via a small adapter that constructs the rdsdata
-	// client lazily.
+	// without an actual Data API round trip. The default is
+	// runner.ExecuteSQLWithConfig.
 	executeSQL func(ctx context.Context, cfg aws.Config, target runner.Target, sql string) (*runner.Result, time.Duration, error)
 
 	// loadState is a seam for tests + the source of truth for the
@@ -38,17 +36,9 @@ func newExecuteHandlers(cache *awsCache, hist *history.Store) *executeHandlers {
 	return &executeHandlers{
 		awsCache:   cache,
 		history:    hist,
-		executeSQL: defaultExecuteSQL,
+		executeSQL: runner.ExecuteSQLWithConfig,
 		loadState:  state.Load,
 	}
-}
-
-// defaultExecuteSQL constructs the rdsdata client from cfg and invokes
-// runner.ExecuteSQL. Kept as a package-level function so test doubles can
-// replace it via the executeSQL field.
-func defaultExecuteSQL(ctx context.Context, cfg aws.Config, target runner.Target, sql string) (*runner.Result, time.Duration, error) {
-	client := rdsdata.NewFromConfig(cfg)
-	return runner.ExecuteSQL(ctx, client, target, sql)
 }
 
 // execute runs a single SQL statement against the requested connection.
@@ -148,45 +138,25 @@ func (h *executeHandlers) execute(w http.ResponseWriter, r *http.Request) {
 }
 
 // isReadOnlyProfile resolves the per-profile read-only policy from
-// state.json. A missing flag (never toggled) defaults to TRUE so fresh
-// installs and unsaved profiles are always safe.
+// state.json via state.IsReadOnly (nil flag or load failure → read-only).
 func (h *executeHandlers) isReadOnlyProfile(profile string) bool {
 	if h.loadState == nil {
 		return true
 	}
-	st, err := h.loadState()
+	readOnly, err := state.IsReadOnly(h.loadState, profile)
 	if err != nil {
 		// Failing closed is safer than failing open for a
 		// destructive-statement guard.
 		log.Printf("rdq gui: state.Load failed during read-only check: %v", err)
-		return true
 	}
-	ps := st.Get(profile)
-	if ps.IsReadOnly == nil {
-		return true
-	}
-	return *ps.IsReadOnly
+	return readOnly
 }
 
 // recordHistory writes a one-line JSONL entry to the history store. All
-// failures are logged at warning level because a broken history file should
-// not prevent the user from seeing their query result.
+// failures are logged because a broken history file should not prevent the
+// user from seeing their query result.
 func (h *executeHandlers) recordHistory(req ExecuteRequest, execErr error, elapsed time.Duration) {
-	if h.history == nil || req.Profile == "" {
-		return
-	}
-	entry := history.Entry{
-		Profile:    req.Profile,
-		Database:   req.Database,
-		SQL:        req.SQL,
-		At:         time.Now(),
-		Ok:         execErr == nil,
-		DurationMS: elapsed.Milliseconds(),
-	}
-	if execErr != nil {
-		entry.ErrorMsg = execErr.Error()
-	}
-	if err := h.history.Append(entry); err != nil {
+	if err := h.history.Record(req.Profile, req.Database, req.SQL, execErr, elapsed); err != nil {
 		log.Printf("rdq gui: append history: %v", err)
 	}
 }

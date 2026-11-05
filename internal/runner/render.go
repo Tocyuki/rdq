@@ -53,7 +53,7 @@ func RenderTable(w io.Writer, r *Result) error {
 	}
 
 	if r.Updated < 0 {
-		if _, err := fmt.Fprintf(w, "(%d %s)\n", len(r.Rows), rowsWord(len(r.Rows))); err != nil {
+		if _, err := fmt.Fprintf(w, "(%d %s)\n", len(r.Rows), RowsWord(len(r.Rows))); err != nil {
 			return err
 		}
 	}
@@ -134,9 +134,9 @@ func detectNumericColumns(columns []string, rows [][]any) []bool {
 	return out
 }
 
-// rowsWord returns "row" for exactly one record and "rows" otherwise so the
-// footer reads naturally ("(1 row)" / "(2 rows)"), matching psql.
-func rowsWord(n int) string {
+// RowsWord returns "row" for exactly one record and "rows" otherwise so
+// row-count footers read naturally ("(1 row)", "(3 rows affected)").
+func RowsWord[T ~int | ~int64](n T) string {
 	if n == 1 {
 		return "row"
 	}

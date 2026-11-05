@@ -803,20 +803,9 @@ func (m *Model) recordHistory(msg executeMsg) {
 	if m.historyStore == nil || strings.TrimSpace(msg.SQL) == "" {
 		return
 	}
-	entry := history.Entry{
-		Profile:    m.target.profile,
-		Database:   m.target.database,
-		SQL:        msg.SQL,
-		At:         time.Now().UTC(),
-		DurationMS: msg.Duration.Milliseconds(),
+	if err := m.historyStore.Record(m.target.profile, m.target.database, msg.SQL, msg.Err, msg.Duration); err != nil {
+		log.Printf("append history: %v", err)
 	}
-	if msg.Err != nil {
-		entry.Ok = false
-		entry.ErrorMsg = msg.Err.Error()
-	} else {
-		entry.Ok = true
-	}
-	_ = m.historyStore.Append(entry)
 }
 
 // handleKey implements the global key bindings (run, focus, toggle, history,
@@ -3672,17 +3661,7 @@ func (m *Model) loadReadOnlyFlag() {
 		m.isReadOnly = true
 		return
 	}
-	st, err := state.Load()
-	if err != nil {
-		m.isReadOnly = true
-		return
-	}
-	ps := st.Get(m.target.profile)
-	if ps.IsReadOnly == nil {
-		m.isReadOnly = true
-		return
-	}
-	m.isReadOnly = *ps.IsReadOnly
+	m.isReadOnly, _ = state.IsReadOnly(state.Load, m.target.profile)
 }
 
 // toggleReadOnly flips the read-only flag, persists the new value, and

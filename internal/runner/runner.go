@@ -34,6 +34,13 @@ const ExecuteTimeout = 2 * time.Minute
 // should treat it as a user-facing hint rather than a real error.
 var ErrEmptySQL = errors.New("enter a SQL statement to run")
 
+// ExecuteSQLWithConfig builds a Data API client from cfg and runs sql via
+// ExecuteSQL. It is the production implementation behind the executeSQL
+// seams in the CLI (command/) and the GUI server (internal/server/).
+func ExecuteSQLWithConfig(ctx context.Context, cfg aws.Config, target Target, sql string) (*Result, time.Duration, error) {
+	return ExecuteSQL(ctx, rdsdata.NewFromConfig(cfg), target, sql)
+}
+
 // ExecuteSQL runs the given SQL against the Data API and returns a parsed
 // Result. It is a synchronous, side-effect free function so HTTP handlers and
 // tea.Cmd wrappers can share it. The caller is responsible for history logging.

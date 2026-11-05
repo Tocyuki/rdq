@@ -15,7 +15,6 @@ import (
 	"github.com/Tocyuki/rdq/internal/runner"
 	"github.com/Tocyuki/rdq/internal/state"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
 	"golang.org/x/term"
 )
 
@@ -83,56 +82,14 @@ func runExec(c *ExecCmd, globals *Globals, stdin io.Reader, stdout, stderr io.Wr
 		return exitUsage
 	}
 
-	readOnly := isReadOnlyProfile(c.loadState, globals.Profile)
-	if readOnly && !runner.IsReadOnlySQL(sql) {
-		fmt.Fprintln(stderr, "rdq exec: "+runner.ErrWriteBlocked.Error())
-		fmt.Fprintln(stderr, "rdq exec: disable read-only mode in the TUI (F8) or GUI settings, then retry.")
-		recordHistory(globals, sql, runner.ErrWriteBlocked, 0)
-		return exitReadOnly
-	}
-
-	if need, reason := runner.NeedsConfirmation(sql); need && !c.Yes {
-		if !c.isTerminal(stdin) {
-			fmt.Fprintln(stderr, "rdq exec: destructive statement requires --yes in non-interactive mode.")
-			fmt.Fprintln(stderr, "rdq exec: "+reason)
-			return exitNotConfirmed
-		}
-		if !promptConfirm(stdin, stderr, reason) {
-			fmt.Fprintln(stderr, "rdq exec: aborted by user.")
-			return exitNotConfirmed
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), runner.ExecuteTimeout)
-	defer cancel()
-
-	target := runner.Target{
-		Profile:  globals.Profile,
-		Region:   globals.AWSConfig.Region,
-		Cluster:  globals.ClusterArn,
-		Secret:   globals.SecretArn,
-		Database: globals.Database,
-	}
-	res, elapsed, execErr := c.executeSQL(ctx, globals.AWSConfig, target, sql)
-	recordHistory(globals, sql, execErr, elapsed)
-
-	if execErr != nil {
-		fmt.Fprintln(stderr, "rdq exec: "+execErr.Error())
-		switch {
-		case errors.Is(execErr, context.DeadlineExceeded):
-			return exitTimeout
-		case errors.Is(execErr, runner.ErrEmptySQL):
-			return exitUsage
-		default:
-			return exitError
-		}
-	}
-
-	if err := renderResult(stdout, stderr, res, c.Output); err != nil {
-		fmt.Fprintln(stderr, "rdq exec: "+err.Error())
-		return exitError
-	}
-	return exitSuccess
+	return sqlPipeline{
+		name:       "rdq exec",
+		yes:        c.Yes,
+		output:     c.Output,
+		executeSQL: c.executeSQL,
+		loadState:  c.loadState,
+		isTerminal: c.isTerminal,
+	}.run(globals, sql, stdin, stdout, stderr)
 }
 
 // setDefaultSeams lazily wires the production implementations for any seam
@@ -140,7 +97,7 @@ func runExec(c *ExecCmd, globals *Globals, stdin io.Reader, stdout, stderr io.Wr
 // tests inject fakes before calling runExec.
 func (c *ExecCmd) setDefaultSeams() {
 	if c.executeSQL == nil {
-		c.executeSQL = defaultExecuteSQL
+		c.executeSQL = runner.ExecuteSQLWithConfig
 	}
 	if c.loadState == nil {
 		c.loadState = state.Load
@@ -148,16 +105,6 @@ func (c *ExecCmd) setDefaultSeams() {
 	if c.isTerminal == nil {
 		c.isTerminal = defaultIsTerminal
 	}
-}
-
-// defaultExecuteSQL mirrors internal/server/handlers_execute.go's
-// defaultExecuteSQL. Both construct a fresh rdsdata client from the shared
-// aws.Config and delegate to the shared runner. Duplicating this thin
-// adapter (rather than exporting a helper from internal/runner) keeps
-// command/ free of server/ dependencies and vice versa.
-func defaultExecuteSQL(ctx context.Context, cfg aws.Config, target runner.Target, sql string) (*runner.Result, time.Duration, error) {
-	client := rdsdata.NewFromConfig(cfg)
-	return runner.ExecuteSQL(ctx, client, target, sql)
 }
 
 // defaultIsTerminal reports whether r is the real terminal stdin.
@@ -204,33 +151,25 @@ func (c *ExecCmd) resolveSQLInput(stdin io.Reader) (string, error) {
 	return "", errors.New("provide SQL as a positional argument, --file <path>, or --file -")
 }
 
-// isReadOnlyProfile resolves the per-profile read-only policy from
-// state.json. A nil IsReadOnly (never toggled) defaults to TRUE to match
-// the TUI/GUI policy — fresh installs are always safe until the user
-// explicitly opts into writes. Exported to command/ scope so both
-// exec and ask share the same gate.
+// isReadOnlyProfile resolves the per-profile read-only policy via
+// state.IsReadOnly, logging (and failing closed on) a broken state file.
 func isReadOnlyProfile(load func() (*state.State, error), profile string) bool {
-	st, err := load()
+	readOnly, err := state.IsReadOnly(load, profile)
 	if err != nil {
-		// Fail closed — losing state.json should not open destructive
-		// writes that the user had gated behind it.
+		// Losing state.json must not open destructive writes that the
+		// user had gated behind it.
 		log.Printf("rdq: state.Load failed, defaulting to read-only: %v", err)
-		return true
 	}
-	ps := st.Get(profile)
-	if ps.IsReadOnly == nil {
-		return true
-	}
-	return *ps.IsReadOnly
+	return readOnly
 }
 
 // promptConfirm shows the destructive-statement reason on stderr and reads a
 // single-line y/N answer from stdin. Only an exact "y" or "yes" (case
 // insensitive) counts as consent; anything else — including EOF on stdin —
 // cancels the run.
-func promptConfirm(stdin io.Reader, stderr io.Writer, reason string) bool {
-	fmt.Fprintln(stderr, "rdq exec: "+reason)
-	fmt.Fprint(stderr, "rdq exec: proceed? [y/N] ")
+func promptConfirm(name string, stdin io.Reader, stderr io.Writer, reason string) bool {
+	fmt.Fprintln(stderr, name+": "+reason)
+	fmt.Fprint(stderr, name+": proceed? [y/N] ")
 	br := bufio.NewReader(stdin)
 	line, err := br.ReadString('\n')
 	if err != nil && line == "" {
@@ -240,33 +179,21 @@ func promptConfirm(stdin io.Reader, stderr io.Writer, reason string) bool {
 	return ans == "y" || ans == "yes"
 }
 
-// recordHistory appends a single execution entry. Ephemeral mode (empty
-// profile) deliberately skips the append so direct-credentials runs leave
-// no on-disk trace, matching the TUI/GUI policy. A broken history file
-// should never fail the user's actual query result, so errors are logged
-// rather than propagated.
-func recordHistory(globals *Globals, sql string, execErr error, elapsed time.Duration) {
+// recordHistory appends a single execution entry via history.Store.Record
+// (which skips ephemeral, profile-less runs). A broken history file should
+// never fail the user's actual query result, so errors are logged rather
+// than propagated.
+func recordHistory(name string, globals *Globals, sql string, execErr error, elapsed time.Duration) {
 	if globals.Profile == "" {
 		return
 	}
 	store, err := history.New()
 	if err != nil {
-		log.Printf("rdq exec: history.New failed: %v", err)
+		log.Printf("%s: history.New failed: %v", name, err)
 		return
 	}
-	entry := history.Entry{
-		Profile:    globals.Profile,
-		Database:   globals.Database,
-		SQL:        sql,
-		At:         time.Now(),
-		Ok:         execErr == nil,
-		DurationMS: elapsed.Milliseconds(),
-	}
-	if execErr != nil {
-		entry.ErrorMsg = execErr.Error()
-	}
-	if err := store.Append(entry); err != nil {
-		log.Printf("rdq exec: history append failed: %v", err)
+	if err := store.Record(globals.Profile, globals.Database, sql, execErr, elapsed); err != nil {
+		log.Printf("%s: history append failed: %v", name, err)
 	}
 }
 
@@ -296,14 +223,7 @@ func renderResult(stdout, stderr io.Writer, res *runner.Result, format string) e
 		return fmt.Errorf("unsupported output format: %s", format)
 	}
 	if res.Updated >= 0 {
-		fmt.Fprintf(stderr, "(%d %s affected)\n", res.Updated, rowsWord(res.Updated))
+		fmt.Fprintf(stderr, "(%d %s affected)\n", res.Updated, runner.RowsWord(res.Updated))
 	}
 	return nil
-}
-
-func rowsWord(n int64) string {
-	if n == 1 {
-		return "row"
-	}
-	return "rows"
 }

@@ -34,9 +34,6 @@ var bareFlags = []bareFlagSpec{
 // knownSubcommands enumerates the top-level subcommand names. preScanBareFlags
 // uses it to detect "rdq --profile exec ..." patterns where the token after a
 // bare flag is a subcommand rather than a value.
-// knownSubcommands enumerates the top-level subcommand names. preScanBareFlags
-// uses it to detect "rdq --profile exec ..." patterns where the token after a
-// bare flag is a subcommand rather than a value.
 //
 // Note: "skills" is intentionally NOT listed here. Adding it would force users
 // with an AWS profile named "skills" to write `--profile=skills` (the bare form
