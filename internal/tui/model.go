@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Tocyuki/rdq/internal/aictx"
 	"github.com/Tocyuki/rdq/internal/bedrock"
@@ -134,7 +135,7 @@ type Model struct {
 	// AI ask state. bedrockModel is the cached model ID (resolved from
 	// state or set by the picker). askInput overlays the editor for
 	// natural-language input. modelList is shown the first time a model is
-	// needed; pendingAsk / pendingExplain chain the model picker into the
+	// needed; pendingAsk / pendingAssist chain the model picker into the
 	// follow-up flow automatically. snapshot holds the schema once it has
 	// loaded asynchronously.
 	bedrockClient   *bedrock.Client
@@ -165,8 +166,12 @@ type Model struct {
 	languageList       list.Model
 	languagePickerOpen bool
 	pendingAsk         bool
-	pendingExplain     bool
-	pendingAskPrompt   string
+	// pendingAssist resumes the F6 flow (explain / review / analyze) that
+	// was interrupted by the model picker. It receives the live *Model
+	// because Bubble Tea copies Model by value between updates, so a
+	// closure must never capture the receiver itself.
+	pendingAssist    func(*Model) tea.Cmd
+	pendingAskPrompt string
 	// askChat is the running multi-turn conversation history for Ask AI
 	// within this TUI session. Each Ctrl+G round trip appends the user
 	// prompt and the assistant's reply, so successive prompts inherit
@@ -220,12 +225,17 @@ type Model struct {
 	forceSecretPicker bool
 
 	// Profile switching overlay. Reuses the same picker UX as cluster /
-	// secret. profileSwitching is true between "user picked a profile"
-	// and "new aws.Config arrived" so the footer can show progress.
+	// secret.
 	profileList       list.Model
 	profilePickerOpen bool
 	profileLoading    bool
-	profileSwitching  bool
+
+	// sessionGen identifies the current connection session. It is bumped
+	// whenever the target (profile / cluster / database) changes, and
+	// async commands issued via scoped() carry the generation they were
+	// started in, so a result that lands after a switch is dropped instead
+	// of being attributed to the new target.
+	sessionGen uint64
 
 	// Database picker shown mid cluster-switch so the user always
 	// confirms the target database name instead of silently inheriting
@@ -516,8 +526,8 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		textarea.Blink,
 		m.spin.Tick,
-		fetchSchemaCmd(m.client, m.target),
-		loadAictxCmd(m.target.cluster, m.target.database),
+		m.scoped(fetchSchemaCmd(m.client, m.target)),
+		m.scoped(loadAictxCmd(m.target.cluster, m.target.database)),
 	)
 }
 
@@ -526,11 +536,25 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	if sm, ok := msg.(sessionScopedMsg); ok {
+		if sm.gen != m.sessionGen {
+			// Result from a previous profile / cluster / database. The
+			// switch already reset the busy flags, so just drop it.
+			return m, nil
+		}
+		msg = sm.msg
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.layout()
+		// refreshTable derives the visible column window from the table
+		// width that layout() just changed.
+		if m.result != nil {
+			m.refreshTable()
+		}
 
 	case spinner.TickMsg:
 		if m.executing || m.askExecuting || m.explainExecuting {
@@ -544,8 +568,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.duration = msg.Duration
 		m.flashMessage = ""
 		m.lastSQL = msg.SQL
-		// A new execution invalidates any previous error analysis.
+		// A new execution invalidates any previous error analysis and
+		// the row inspector (its row index refers to the old result).
 		m.explainOpen = false
+		m.inspecting = false
 		m.recordHistory(msg)
 		if msg.Err != nil {
 			m.lastErr = msg.Err
@@ -603,7 +629,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastErr = fmt.Errorf("list bedrock models: %w", msg.err)
 			m.modelPickerOpen = false
 			m.pendingAsk = false
-			m.pendingExplain = false
+			m.pendingAssist = nil
 			break
 		}
 		items := make([]list.Item, len(msg.models))
@@ -690,7 +716,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.profilePickerOpen = true
 
 	case profileSwitchedMsg:
-		m.profileSwitching = false
 		if msg.err != nil {
 			m.lastErr = fmt.Errorf("switch profile: %w", msg.err)
 			break
@@ -1164,17 +1189,19 @@ func containsFilter(term string, targets []string) []list.Rank {
 		}
 		return out
 	}
-	needle := strings.ToLower(term)
 	var out []list.Rank
 	for i, t := range targets {
-		hay := strings.ToLower(t)
-		idx := strings.Index(hay, needle)
-		if idx < 0 {
+		hits := findAllFold(t, term)
+		if len(hits) == 0 {
 			continue
 		}
-		matches := make([]int, 0, len(needle))
-		for j := 0; j < len(needle); j++ {
-			matches = append(matches, idx+j)
+		// MatchedIndexes are *rune* indexes (the list delegate styles
+		// runes), so convert the byte range of the first hit.
+		start := utf8.RuneCountInString(t[:hits[0][0]])
+		n := utf8.RuneCountInString(t[hits[0][0]:hits[0][1]])
+		matches := make([]int, n)
+		for j := range matches {
+			matches[j] = start + j
 		}
 		out = append(out, list.Rank{Index: i, MatchedIndexes: matches})
 	}
@@ -2281,10 +2308,10 @@ func (m *Model) dispatchAssist() tea.Cmd {
 // openAssistOverlay opens the askInput textarea in the given assist
 // kind. Returns either a textarea.Blink cmd (overlay opened) or, when no
 // Bedrock model has been chosen yet, the model picker chained via
-// pendingExplain so the user lands back in this flow afterwards.
+// pendingAssist so the user lands back in this flow afterwards.
 func (m *Model) openAssistOverlay(kind askKind, placeholder string) tea.Cmd {
 	if m.bedrockModel == "" {
-		m.pendingExplain = true
+		m.pendingAssist = func(m *Model) tea.Cmd { return m.openAssistOverlay(kind, placeholder) }
 		return m.openModelPicker(false)
 	}
 	m.askKind = kind
@@ -2329,11 +2356,17 @@ func (m *Model) startReviewFocused(focus string) tea.Cmd {
 		return nil
 	}
 	if m.bedrockModel == "" {
-		m.pendingExplain = true
+		m.pendingAssist = func(m *Model) tea.Cmd { return m.startReviewFocused(focus) }
 		return m.openModelPicker(false)
 	}
 	if m.pendingReviewSQL == "" {
 		m.lastErr = fmt.Errorf("no SQL captured for review")
+		return nil
+	}
+	if m.explainExecuting {
+		// One AI analysis at a time: the first reply would otherwise
+		// clear the spinner while the second is still in flight.
+		m.flashMessage = "AI request already in progress"
 		return nil
 	}
 	m.explainExecuting = true
@@ -2341,7 +2374,7 @@ func (m *Model) startReviewFocused(focus string) tea.Cmd {
 	m.aiBusyLabel = "reviewing SQL..."
 	m.flashMessage = ""
 	systemPrompt := bedrock.BuildReviewSystemPrompt(m.target.database, m.bedrockLanguage, m.aictx, m.snapshot)
-	cmd := reviewCmd(m.bedrockClient, m.bedrockModel, systemPrompt, m.pendingReviewSQL, focus)
+	cmd := m.scoped(reviewCmd(m.bedrockClient, m.bedrockModel, systemPrompt, m.pendingReviewSQL, focus))
 	return tea.Batch(m.spin.Tick, cmd)
 }
 
@@ -2353,11 +2386,15 @@ func (m *Model) startAnalyzeFocused(focus string) tea.Cmd {
 		return nil
 	}
 	if m.bedrockModel == "" {
-		m.pendingExplain = true
+		m.pendingAssist = func(m *Model) tea.Cmd { return m.startAnalyzeFocused(focus) }
 		return m.openModelPicker(false)
 	}
 	if m.pendingAnalyzeBlob == "" {
 		m.lastErr = fmt.Errorf("no result captured for analysis")
+		return nil
+	}
+	if m.explainExecuting {
+		m.flashMessage = "AI request already in progress"
 		return nil
 	}
 	m.explainExecuting = true
@@ -2365,7 +2402,7 @@ func (m *Model) startAnalyzeFocused(focus string) tea.Cmd {
 	m.aiBusyLabel = "analyzing result..."
 	m.flashMessage = ""
 	systemPrompt := bedrock.BuildAnalysisSystemPrompt(m.target.database, m.bedrockLanguage, m.aictx, m.snapshot)
-	cmd := analyzeCmd(m.bedrockClient, m.bedrockModel, systemPrompt, m.pendingAnalyzeSQL, m.pendingAnalyzeBlob, focus)
+	cmd := m.scoped(analyzeCmd(m.bedrockClient, m.bedrockModel, systemPrompt, m.pendingAnalyzeSQL, m.pendingAnalyzeBlob, focus))
 	return tea.Batch(m.spin.Tick, cmd)
 }
 
@@ -2380,7 +2417,13 @@ func truncateForPrompt(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	return s[:limit] + "\n... (truncated for prompt size)"
+	// Back up to a rune boundary so multi-byte (e.g. Japanese) data is
+	// never cut mid-character, which would send invalid UTF-8 to Bedrock.
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "\n... (truncated for prompt size)"
 }
 
 // composeReviewText wraps the LLM's review with a header that shows the
@@ -2749,15 +2792,20 @@ func (m Model) canExplainError() bool {
 
 // startExplain captures the failed SQL + error message and dispatches a
 // Bedrock analysis. When no model has been picked yet the model selector
-// runs first; pendingExplain ensures the picker continues into the analyst
-// flow on confirmation.
+// runs first; pendingAssist ensures the picker continues into the analyst
+// flow on confirmation. The failed SQL / error are captured up front
+// because openModelPicker clears lastErr for its own status line.
 func (m *Model) startExplain() tea.Cmd {
 	if m.bedrockClient == nil {
 		m.lastErr = fmt.Errorf("bedrock client is not configured")
 		return nil
 	}
 	if m.bedrockModel == "" {
-		m.pendingExplain = true
+		failedSQL, failedErr := m.lastSQL, m.lastErr
+		m.pendingAssist = func(m *Model) tea.Cmd {
+			m.lastSQL, m.lastErr = failedSQL, failedErr
+			return m.startExplain()
+		}
 		return m.openModelPicker(false)
 	}
 	if m.lastErr == nil || m.lastSQL == "" {
@@ -2770,7 +2818,7 @@ func (m *Model) startExplain() tea.Cmd {
 	m.aiBusyLabel = "analyzing error..."
 	m.flashMessage = ""
 	conv := []bedrock.Message{{Role: bedrock.RoleUser, Text: userPrompt}}
-	return tea.Batch(m.spin.Tick, explainCmd(m.bedrockClient, m.bedrockModel, systemPrompt, conv))
+	return tea.Batch(m.spin.Tick, m.scoped(explainCmd(m.bedrockClient, m.bedrockModel, systemPrompt, conv)))
 }
 
 // startAsk is the entry point for the Ctrl+G shortcut. It always opens the
@@ -2923,7 +2971,7 @@ func (m *Model) startAskPrompt(prompt string) tea.Cmd {
 	// Defensive copy so the goroutine can't observe a slice that the
 	// askResultMsg handler is about to mutate.
 	conv := askConversationWithCurrentSQL(m.askChat, m.editor.Value(), prompt)
-	return tea.Batch(m.spin.Tick, askCmd(m.bedrockClient, m.bedrockModel, systemPrompt, conv, prompt))
+	return tea.Batch(m.spin.Tick, m.scoped(askCmd(m.bedrockClient, m.bedrockModel, systemPrompt, conv, prompt)))
 }
 
 func askConversationWithCurrentSQL(messages []bedrock.Message, currentSQL, prompt string) []bedrock.Message {
@@ -3011,7 +3059,7 @@ func (m *Model) updateModelPicker(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.modelPickerOpen = false
 		m.pendingAsk = false
-		m.pendingExplain = false
+		m.pendingAssist = nil
 		m.pendingAskPrompt = ""
 		return nil
 	}
@@ -3039,7 +3087,6 @@ func (m *Model) updateProfilePicker(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		if item, ok := m.profileList.SelectedItem().(profileItem); ok {
 			m.profilePickerOpen = false
-			m.profileSwitching = true
 			m.flashMessage = "switching to profile " + item.name + "..."
 			return switchProfileCmd(item.name)
 		}
@@ -3077,15 +3124,11 @@ func (m *Model) applyProfileSwitch(profile string, cfg aws.Config) tea.Cmd {
 		}
 	}
 
-	// Drop the previous cluster's results / snapshot so AI prompts and
-	// the table view do not mix data across profiles. Also reset the
-	// running Ask AI chat so a fresh session starts after every profile
-	// switch — the previous schema is no longer relevant.
-	m.result = nil
-	m.jsonText = ""
-	m.lastErr = nil
-	m.snapshot = nil
-	m.askChat = nil
+	// Drop the previous cluster's results / snapshot / AI context so AI
+	// prompts and the table view do not mix data across profiles. Also
+	// reset the running Ask AI chat so a fresh session starts after every
+	// profile switch — the previous schema is no longer relevant.
+	m.resetSessionState()
 
 	// Hydrate the production flag from the new profile's state and
 	// re-run layout() so the banner line is accounted for in the
@@ -3101,6 +3144,10 @@ func (m *Model) applyProfileSwitch(profile string, cfg aws.Config) tea.Cmd {
 
 	st, err := state.Load()
 	if err != nil {
+		// The cluster / secret on m.target belong to the previous
+		// profile and are not valid under the new credentials.
+		m.target.cluster = ""
+		m.target.secret = ""
 		m.flashMessage = "switched profile but state load failed: " + err.Error()
 		return m.openClusterPicker()
 	}
@@ -3115,11 +3162,10 @@ func (m *Model) applyProfileSwitch(profile string, cfg aws.Config) tea.Cmd {
 		m.target.cluster = ps.Cluster
 		m.target.secret = ps.Secret
 		m.target.database = ps.Database
-		m.aictx = ""
 		m.flashMessage = "profile: " + profile + " · " + shortARN(ps.Cluster)
 		return tea.Batch(
-			fetchSchemaCmd(m.client, m.target),
-			loadAictxCmd(m.target.cluster, m.target.database),
+			m.scoped(fetchSchemaCmd(m.client, m.target)),
+			m.scoped(loadAictxCmd(m.target.cluster, m.target.database)),
 		)
 	}
 
@@ -3466,22 +3512,60 @@ func (m *Model) finalizeTargetSwitch(database string) tea.Cmd {
 	// Drop stale state from the previous cluster now that the switch
 	// is committed. Ask AI chat is also reset because the new cluster's
 	// schema is unrelated to the previous conversation.
-	m.result = nil
-	m.jsonText = ""
-	m.jsonRaw = ""
-	m.lastErr = nil
-	m.snapshot = nil
-	m.askChat = nil
-	m.clearSearch()
+	m.resetSessionState()
 	m.flashMessage = "switched to " + shortARN(m.target.cluster) + " · " + database
-	m.aictx = ""
 	if err := m.persistTarget(); err != nil {
 		log.Printf("save cluster/secret/database failed: %v", err)
 	}
 	return tea.Batch(
-		fetchSchemaCmd(m.client, m.target),
-		loadAictxCmd(m.target.cluster, m.target.database),
+		m.scoped(fetchSchemaCmd(m.client, m.target)),
+		m.scoped(loadAictxCmd(m.target.cluster, m.target.database)),
 	)
+}
+
+// resetSessionState drops everything tied to the previous connection
+// target: results, search, overlays, schema / AI context, the Ask chat,
+// and any in-flight async work. Bumping sessionGen makes scoped() results
+// from the old target arrive as no-ops, so the busy flags are cleared
+// here rather than by those (now ignored) result messages.
+func (m *Model) resetSessionState() {
+	m.sessionGen++
+	m.executing = false
+	m.askExecuting = false
+	m.explainExecuting = false
+	m.aiBusyLabel = ""
+
+	m.result = nil
+	m.jsonRaw = ""
+	m.jsonText = ""
+	m.lastErr = nil
+	m.lastSQL = ""
+	m.inspecting = false
+	m.explainOpen = false
+	m.explainText = ""
+	m.snapshot = nil
+	m.aictx = ""
+	m.askChat = nil
+	m.clearSearch()
+}
+
+// sessionScopedMsg wraps the result of an async command together with the
+// session generation it was started in. See Model.scoped.
+type sessionScopedMsg struct {
+	gen uint64
+	msg tea.Msg
+}
+
+// scoped tags cmd's eventual message with the current session generation
+// so Update can discard it if the target changed while it was in flight.
+func (m *Model) scoped(cmd tea.Cmd) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
+	gen := m.sessionGen
+	return func() tea.Msg {
+		return sessionScopedMsg{gen: gen, msg: cmd()}
+	}
 }
 
 // persistTarget writes the active cluster + secret back to the per-profile
@@ -3526,9 +3610,9 @@ func (m *Model) continuePending(modelName string) tea.Cmd {
 		}
 		return m.openAskInput()
 	}
-	if m.pendingExplain {
-		m.pendingExplain = false
-		return m.startExplain()
+	if resume := m.pendingAssist; resume != nil {
+		m.pendingAssist = nil
+		return resume(m)
 	}
 	if modelName != "" {
 		m.flashMessage = "bedrock model: " + modelName
@@ -3565,7 +3649,7 @@ func (m *Model) updateLanguagePicker(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.languagePickerOpen = false
 		m.pendingAsk = false
-		m.pendingExplain = false
+		m.pendingAssist = nil
 		m.pendingAskPrompt = ""
 		return nil
 	}
@@ -3659,7 +3743,7 @@ func (m *Model) startRun(sql string) tea.Cmd {
 	m.executing = true
 	m.lastErr = nil
 	m.flashMessage = ""
-	return tea.Batch(m.spin.Tick, runStatement(m.client, m.target, sql, m.isReadOnly))
+	return tea.Batch(m.spin.Tick, m.scoped(runStatement(m.client, m.target, sql, m.isReadOnly)))
 }
 
 // updateConfirmRunPrompt handles input while the destructive-statement
