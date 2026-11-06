@@ -122,9 +122,8 @@ func TestToPromptEmpty(t *testing.T) {
 	}
 }
 
-// TestLoadCacheTreatsOldVersionAsMiss: caches written before primary-key
-// support (no version field) must be refetched, otherwise the GUI preview
-// would fall back to ordering by every column on tables that have a PK.
+// TestLoadCacheTreatsOldVersionAsMiss: caches written in an older format
+// (no version field) must be refetched rather than served as-is.
 func TestLoadCacheTreatsOldVersionAsMiss(t *testing.T) {
 	t.Setenv("RDQ_SCHEMA_DIR", t.TempDir())
 	cluster, database := "arn:c", "db"
@@ -143,8 +142,7 @@ func TestLoadCacheTreatsOldVersionAsMiss(t *testing.T) {
 		t.Fatalf("legacy cache should be a miss, got %+v, %v", got, err)
 	}
 
-	// A current-version cache is served even when the PK lookup had
-	// failed (PrimaryKeysKnown=false), so it is not refetched every time.
+	// A current-version cache is served without a refetch.
 	current := &Snapshot{Version: snapshotVersion, Cluster: cluster, Database: database,
 		Columns: []Column{{Schema: "public", Table: "t", Name: "id", Type: "integer"}}}
 	if err := SaveCache(current); err != nil {
