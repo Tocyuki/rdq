@@ -44,12 +44,11 @@ var bareFlags = []bareFlagSpec{
 var knownSubcommands = map[string]bool{
 	"exec": true,
 	"ask":  true,
-	"gui":  true,
 	"tui":  true,
 }
 
 // commandsNeedingConnection are the subcommands that require a resolved
-// cluster/secret/database. gui has its own selection UI and is excluded.
+// cluster/secret/database.
 var commandsNeedingConnection = map[string]bool{
 	"exec": true,
 	"ask":  true,
@@ -69,7 +68,6 @@ var cli struct {
 
 	Exec command.ExecCmd `cmd:"" help:"Execute a SQL statement."`
 	Ask  command.AskCmd  `cmd:"" help:"Translate natural language to SQL and execute."`
-	GUI  command.GUICmd  `cmd:"" help:"Launch browser-based SQL client."`
 	TUI  command.TUICmd  `cmd:"" help:"Launch interactive TUI mode." default:"1"`
 }
 

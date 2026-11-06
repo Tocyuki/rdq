@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -33,9 +32,6 @@ type Column struct {
 	Table  string `json:"table"`
 	Name   string `json:"name"`
 	Type   string `json:"type"`
-	// PrimaryKey is the column's 1-based position in its table's primary
-	// key, or 0 when it is not part of one.
-	PrimaryKey int `json:"primary_key,omitempty"`
 }
 
 // Snapshot captures the full set of columns for one (cluster, database) pair
@@ -47,18 +43,13 @@ type Snapshot struct {
 	Database  string    `json:"database"`
 	FetchedAt time.Time `json:"fetched_at"`
 	Columns   []Column  `json:"columns"`
-	// PrimaryKeysKnown reports whether Column.PrimaryKey was populated.
-	// It is false for caches written by older rdq versions and when the
-	// primary-key lookup failed, so consumers can tell "no primary key"
-	// apart from "unknown".
-	PrimaryKeysKnown bool `json:"primary_keys_known,omitempty"`
 }
 
 // fetchQueryFiltered joins information_schema.schemata to drop schemas
 // owned by Aurora-managed system roles (`rdsadmin`) and the PostgreSQL
 // built-in pseudo-owner of catalog schemas (`pg_database_owner`). These
 // two consistently surface `information_schema` and `pg_catalog` as
-// noise in the TUI / GUI sidebars and in AI schema prompts — hiding
+// noise in the TUI sidebar and in AI schema prompts — hiding
 // them upstream keeps the display focused on application schemas.
 //
 // `information_schema.schemata.schema_owner` is a PostgreSQL-specific
@@ -80,26 +71,12 @@ const fetchQuery = `SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE
 FROM information_schema.COLUMNS
 ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION`
 
-// primaryKeyQuery lists primary-key columns in key order. TABLE_CONSTRAINTS
-// and KEY_COLUMN_USAGE are standard information_schema views available on
-// both Aurora PostgreSQL and Aurora MySQL.
-const primaryKeyQuery = `SELECT kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.COLUMN_NAME, kcu.ORDINAL_POSITION
-FROM information_schema.TABLE_CONSTRAINTS tc
-JOIN information_schema.KEY_COLUMN_USAGE kcu
-  ON kcu.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
- AND kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
- AND kcu.TABLE_SCHEMA = tc.TABLE_SCHEMA
- AND kcu.TABLE_NAME = tc.TABLE_NAME
-WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
-ORDER BY kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.ORDINAL_POSITION`
-
-// FetchTimeout is the overall budget for one Fetch (all pages plus the
-// primary-key lookup). Shared by the TUI and the GUI server.
+// FetchTimeout is the overall budget for one Fetch (all pages).
 const FetchTimeout = 2 * time.Minute
 
 // snapshotVersion is bumped whenever Snapshot gains data that older caches
 // lack. LoadCache treats an older cache as a miss so it is refetched once
-// automatically. Version 2 added primary-key information.
+// automatically.
 const snapshotVersion = 2
 
 // fetchPageSize bounds the rows per ExecuteStatement call. The Data API
@@ -121,8 +98,7 @@ type execFunc func(ctx context.Context, sql string) (*rdsdata.ExecuteStatementOu
 // see `information_schema` / `pg_catalog` noise in the sidebar. On the
 // first error (typically Aurora MySQL, which lacks schema_owner) it
 // retries with the simple query; only if the retry also fails does the
-// error propagate. Results are fetched in pages (see fetchPageSize), and
-// primary-key membership is looked up on a best-effort basis.
+// error propagate. Results are fetched in pages (see fetchPageSize).
 func Fetch(ctx context.Context, client *rdsdata.Client, cluster, secret, database string) (*Snapshot, error) {
 	exec := func(ctx context.Context, sql string) (*rdsdata.ExecuteStatementOutput, error) {
 		return executeFetch(ctx, client, cluster, secret, database, sql)
@@ -160,13 +136,6 @@ func fetchWith(ctx context.Context, exec execFunc, cluster, database string) (*S
 		}
 		snapshot.Columns = append(snapshot.Columns, col)
 	}
-
-	// Primary keys are an enhancement (stable preview ordering), so a
-	// failure here leaves PrimaryKeysKnown=false instead of failing Fetch.
-	if pkRecords, err := fetchAllPages(ctx, exec, primaryKeyQuery); err == nil {
-		applyPrimaryKeys(snapshot, pkRecords)
-		snapshot.PrimaryKeysKnown = true
-	}
 	return snapshot, nil
 }
 
@@ -183,23 +152,6 @@ func fetchAllPages(ctx context.Context, exec execFunc, base string) ([][]types.F
 		if len(out.Records) != fetchPageSize {
 			return all, nil
 		}
-	}
-}
-
-func applyPrimaryKeys(s *Snapshot, records [][]types.Field) {
-	type colKey struct{ schema, table, name string }
-	pos := make(map[colKey]int, len(records))
-	for _, r := range records {
-		if len(r) < 4 {
-			continue
-		}
-		if n := intField(r[3]); n > 0 {
-			pos[colKey{stringField(r[0]), stringField(r[1]), stringField(r[2])}] = n
-		}
-	}
-	for i := range s.Columns {
-		c := &s.Columns[i]
-		c.PrimaryKey = pos[colKey{c.Schema, c.Table, c.Name}]
 	}
 }
 
@@ -224,20 +176,6 @@ func stringField(f types.Field) string {
 	return ""
 }
 
-// intField extracts an integer from a Data API Field. information_schema
-// ordinal columns come back as longs on MySQL and may come back as strings
-// for PostgreSQL's cardinal_number domain.
-func intField(f types.Field) int {
-	switch v := f.(type) {
-	case *types.FieldMemberLongValue:
-		return int(v.Value)
-	case *types.FieldMemberStringValue:
-		n, _ := strconv.Atoi(strings.TrimSpace(v.Value))
-		return n
-	}
-	return 0
-}
-
 // LoadCache reads a previously-saved Snapshot from disk. A missing file is
 // not an error; callers can interpret nil as "no cache yet".
 func LoadCache(cluster, database string) (*Snapshot, error) {
@@ -257,10 +195,8 @@ func LoadCache(cluster, database string) (*Snapshot, error) {
 		return nil, fmt.Errorf("parse schema cache %s: %w", path, err)
 	}
 	if s.Version < snapshotVersion {
-		// Written by an older rdq: missing data (e.g. primary keys) would
-		// silently degrade features, so report a miss and let the caller
-		// refetch. Keyed on the version rather than PrimaryKeysKnown so a
-		// current cache whose PK lookup legitimately failed is still used.
+		// Written by an older rdq in an outdated format: report a miss and
+		// let the caller refetch.
 		return nil, nil
 	}
 	return &s, nil

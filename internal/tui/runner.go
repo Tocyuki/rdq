@@ -51,7 +51,7 @@ type executeMsg struct {
 // keyword is not a pure read, the command short-circuits with
 // runner.ErrWriteBlocked so no AWS round trip happens. The caller
 // (Model.readOnlyForRun) decides the policy by consulting state.json,
-// keeping the TUI consistent with the GUI's /api/execute enforcement.
+// keeping the TUI consistent with the `rdq exec` / `rdq ask` enforcement.
 func runStatement(client *rdsdata.Client, tgt target, sql string, readOnly bool) tea.Cmd {
 	return func() tea.Msg {
 		if readOnly && !runner.IsReadOnlySQL(sql) {

@@ -25,7 +25,7 @@ Trigger on requests like:
 
 **Do not** use this skill for interactive exploration, schema browsing across
 many statements, or anything requiring multi-step UI. Direct the user to
-`rdq tui` (TUI) or `rdq gui` (browser-based client) instead.
+`rdq tui` (interactive TUI) instead.
 
 ## Prerequisites
 
@@ -137,12 +137,12 @@ Each AWS profile has a tri-state read-only flag in `~/.rdq/state.json`:
 
 When read-only is ON and the SQL is a write, `rdq exec` exits **3** without
 contacting AWS. The agent **must not** disable this on the user's behalf —
-only the user can flip it via `rdq tui` (`F8`) or the GUI Settings panel.
+only the user can flip it via `rdq tui` (`F8`).
 
 If you hit exit 3, surface this to the user with a message like:
 
 > rdq is in read-only mode for this profile. To allow writes, run `rdq tui`
-> and toggle with `F8`, or open the GUI Settings, then re-run.
+> and toggle with `F8`, then re-run.
 
 ## Safety: destructive-statement confirmation
 
@@ -249,4 +249,4 @@ This uses the `staging` AWS profile; cluster/secret/database resolve from
 
 - [`references/EXIT_CODES.md`](references/EXIT_CODES.md) — every exit code,
   cause, and recovery pattern in one place.
-- `rdq --help` — global flags and other subcommands (`tui`, `gui`, `ask`).
+- `rdq --help` — global flags and other subcommands (`tui`, `ask`).

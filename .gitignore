@@ -10,15 +10,5 @@
 # CSV exports written by the TUI's Ctrl+E / export shortcut.
 rdq-*.csv
 
-# Frontend
-frontend/node_modules/
-frontend/dist/
-
-# Embedded frontend build output. Release binaries are built in CI after
-# running `make frontend-build`; keep only the placeholder so //go:embed has
-# a match for source builds that intentionally skip the frontend bundle.
-internal/server/dist/*
-!internal/server/dist/.gitkeep
-
 # GoReleaser output directory.
 /dist/

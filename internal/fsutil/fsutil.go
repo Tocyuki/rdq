@@ -2,8 +2,8 @@
 // state / history / schema stores: an atomic write helper and an
 // inter-process lock.
 //
-// Several rdq processes can touch ~/.rdq at the same time (a TUI session,
-// the GUI server, and `rdq exec` from a script). Each store does
+// Several rdq processes can touch ~/.rdq at the same time (one or more TUI
+// sessions and `rdq exec` / `rdq ask` from a script). Each store does
 // read-modify-write cycles on a whole file, so without a lock two processes
 // can both read the old contents and the second rename silently discards
 // the first one's change.

@@ -17,7 +17,7 @@
 - Get automatic, in-context error explanations whenever a query fails
 - Switch between AWS profiles, clusters, secrets, Bedrock models, and response languages without leaving the TUI
 
-The `gui` subcommand exposes a browser-based SQL client (React + Vite SPA embedded in the binary) that delivers the same core experience: SQL execution, result viewing, CSV / JSON export, schema browsing, history, and Bedrock-assisted Ask / Review / Analyze / Explain flows. The `exec` subcommand runs a single statement one-shot for scripts and CI pipelines, sharing the same safety guards as the TUI / GUI. The `ask` subcommand layers Bedrock on top of `exec`: pass a natural-language prompt and `rdq` generates SQL via Amazon Bedrock and runs it through the same pipeline.
+The `exec` subcommand runs a single statement one-shot for scripts and CI pipelines, sharing the same safety guards as the TUI. The `ask` subcommand layers Bedrock on top of `exec`: pass a natural-language prompt and `rdq` generates SQL via Amazon Bedrock and runs it through the same pipeline.
 
 ## Features
 
@@ -57,33 +57,16 @@ The `gui` subcommand exposes a browser-based SQL client (React + Vite SPA embedd
 - **Ephemeral mode for direct credentials** — when no profile name is in play (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` only), `rdq` walks through the cluster / secret / database pickers from scratch every launch and writes nothing to `~/.rdq/state.json` or the history log. The status bar shows `(direct credentials · ephemeral)` so the mode is visible
 - **Friendly credentials error** — if no provider in the SDK chain can produce credentials, `rdq` exits with an actionable message instead of the raw SDK error
 
-### Safety features (TUI + GUI)
+### Safety features
 
-Both modes share the same guards so destructive SQL is hard to run by accident:
+The TUI and the one-shot `exec` / `ask` commands share the same guards so destructive SQL is hard to run by accident:
 
 - **Read-only mode** (default **on** for fresh profiles) — only `SELECT` / `WITH` / `SHOW` / `EXPLAIN` / `DESCRIBE` / `DESC` / `TABLE` / `VALUES` can execute. Everything else is rejected before the request reaches AWS. `EXPLAIN` is allowed only when the explained statement is itself read-only (`EXPLAIN ANALYZE` executes it; use `DESCRIBE` instead of MySQL's `EXPLAIN <table>`), `SELECT ... INTO` is rejected, and every `;`-separated statement must pass. Statements are checked under both PostgreSQL and MySQL lexing rules, so MySQL-only constructs (`/*! ... */` executable comments, backslash escapes, `#` comments) cannot hide a write.
-  - TUI: toggle with **`F8`**; the status bar shows a **`RO`** marker when it is on.
-  - GUI: toggle in **Settings**; the connection bar shows a **Read-only** badge (or **Allow writes** when off).
-- **Production environment flag** — per profile. When set, the GUI connection bar flips to a warning colour and the TUI shows a matching indicator, so destructive statements stand out visually before you run them.
-- **Destructive-statement confirmation** — `DELETE` / `UPDATE` without a top-level `WHERE` clause, `TRUNCATE`, and any multi-statement input open a confirmation prompt (TUI) or dialog (GUI) with the exact statement. Nothing is sent to AWS until you acknowledge it. The guard understands line / block comments, string literals, quoted identifiers and dollar-quoted strings, so `UPDATE t SET col = '-- just a string'` is not misclassified as "commented-out WHERE", and a `WHERE` that only appears inside a subquery does not count.
+  - Toggle with **`F8`** in the TUI; the status bar shows a **`RO`** marker when it is on.
+- **Production environment flag** — per profile. When set, the TUI switches to a warning theme (red borders and a **PRODUCTION** banner), so destructive statements stand out visually before you run them.
+- **Destructive-statement confirmation** — `DELETE` / `UPDATE` without a top-level `WHERE` clause, `TRUNCATE`, and any multi-statement input open a confirmation prompt with the exact statement. Nothing is sent to AWS until you acknowledge it. The guard understands line / block comments, string literals, quoted identifiers and dollar-quoted strings, so `UPDATE t SET col = '-- just a string'` is not misclassified as "commented-out WHERE", and a `WHERE` that only appears inside a subquery does not count.
 
 Flags are stored per profile in `~/.rdq/state.json` and survive restarts.
-
-### GUI mode (browser-based SQL client)
-
-Launch with `rdq gui`. The server binds to `127.0.0.1` and opens a browser window automatically using a per-run GUI session token embedded in the launch URL. Add `--no-open` to suppress the automatic browser launch; in that mode `rdq` prints the full launch URL you should open manually. The GUI shares the same `internal/` engines as the TUI, so results, history, and schema caches are consistent across both surfaces.
-
-- **Connection wizard** — pick profile → cluster → secret → database from browser-side searchable lists; the selection persists to `~/.rdq/state.json` just like the TUI. Each field also has a **one-click switcher** in the connection bar (Profile / Cluster / Database badges) so you can rebind without reopening the full wizard.
-- **CodeMirror 6 SQL editor** — syntax highlighting, schema-aware autocomplete, `Cmd/Ctrl+Enter` to run. If text is selected, only the selection runs.
-- **Result viewer** with Table / JSON / Info tabs, row detail dialog, CSV / JSON download, and one-click **Copy to clipboard** (CSV or JSON).
-- **Find in result** — `Cmd/Ctrl+F` opens a search bar over the Result Table. `Enter` / `Shift+Enter` step to the next / previous match (with a running `N / M` counter), matches are highlighted in the table, and the active match is accented and scrolled into view. The same substring is also highlighted in the schema sidebar's filter.
-- **Resizable layout** — drag the vertical handle to resize Schema ↔ Editor+Result, and the horizontal handle to resize Editor ↔ Result. Your layout is saved to `localStorage` and restored on reload.
-- **History panel** — per-profile SQL log with substring search, favourites toggle, "Load into editor", and per-row **Copy**. Duplicate statements are de-duplicated on append: running the same SQL twice keeps one entry with the latest timestamp (favourite status is preserved).
-- **Schema sidebar** — filterable table / column tree; double-click to insert qualified names into the editor; click a row to copy the qualified identifier to the clipboard.
-- **Bedrock AI dialogs** — Ask (natural language → SQL with multi-turn chat), Review (critique current SQL), Analyze (interpret last result), Explain (diagnose an error). Each response renders as Markdown with syntax-highlighted code blocks, and adapts to light / dark theme. Explain opens automatically with the last error pre-filled when you click the **Explain** button.
-- **Safety badges** — the connection bar always shows **Read-only** or **Allow writes** and flips to a warning palette when the active profile is flagged as production. See [Safety features](#safety-features-tui--gui).
-- **Security** — the server binds `127.0.0.1` only and enforces Origin / Host checks against the localhost allow-list; `--dev` temporarily adds `http://localhost:5173` so `cd frontend && npm run dev` proxying works during frontend development.
-- **Graceful shutdown** — `SIGINT` / `SIGTERM` drains in-flight requests within 10 s.
 
 ## Installation
 
@@ -93,15 +76,11 @@ Launch with `rdq gui`. The server binds to `127.0.0.1` and opens a browser windo
 brew install --cask Tocyuki/tap/rdq
 ```
 
-The Homebrew Cask installs the prebuilt release binary, which includes the embedded frontend bundle used by `rdq gui`.
-
 ### `go install`
 
 ```bash
 go install github.com/Tocyuki/rdq/cmd/rdq@latest
 ```
-
-`go install` builds from the module source and does not run the frontend build, so it is intended for the TUI / `exec` workflows. Use Homebrew Cask or a prebuilt release binary if you need `rdq gui`.
 
 #### Troubleshooting: `sum.golang.org` verification failure
 
@@ -135,16 +114,14 @@ Download the tarball for your OS / arch from the [GitHub Releases page](https://
 
 ### Build from source
 
-Requires Go 1.25+ and Node.js 20+ (for the frontend build).
+Requires Go 1.25+.
 
 ```bash
 git clone https://github.com/Tocyuki/rdq.git
 cd rdq
-make build           # builds the frontend, copies it into internal/server/dist/, then builds rdq
+make build           # builds ./rdq
 ./rdq --help
 ```
-
-`make build` is the one source-build path that produces a fully working `rdq gui`. `make go-build` is a faster Go-only rebuild that reuses whatever assets `internal/server/dist/` currently contains.
 
 ## Usage
 
@@ -168,18 +145,9 @@ rdq
 | `--bedrock-language` | | Override the cached response language (env: `RDQ_BEDROCK_LANGUAGE`). |
 | `--debug` | `-d` | Verbose logging. |
 
-### GUI subcommand flags
-
-Only applies to `rdq gui`. The TUI uses neither flag.
-
-| Flag | Short | Default | Description |
-| --- | --- | --- | --- |
-| `--port` | `-P` | `8080` | Port the embedded HTTP server listens on. |
-| `--no-open` | | `false` | Skip opening the browser automatically on launch; `rdq` prints the full tokenized launch URL instead. |
-
 ### exec subcommand
 
-One-shot SQL execution for scripts, CI pipelines, and ad-hoc queries. Shares the same read-only gate, destructive-statement confirmation, and per-profile history with the TUI and GUI (see [Safety features](#safety-features-tui--gui)).
+One-shot SQL execution for scripts, CI pipelines, and ad-hoc queries. Shares the same read-only gate, destructive-statement confirmation, and per-profile history with the TUI (see [Safety features](#safety-features)).
 
 ```bash
 rdq exec "SELECT COUNT(*) FROM users"
@@ -408,7 +376,7 @@ Inside the TUI, `^P` opens the profile picker again at any time. Switching to a 
 | `secretsmanager:ListSecrets` | Secrets Manager | Secret picker | `*` (enumeration) |
 | `secretsmanager:DescribeSecret` | Secrets Manager | Resolving `MasterUserSecret` display name | Secret ARN |
 | `secretsmanager:GetSecretValue` | Secrets Manager | Required by the Data API backend on every `ExecuteStatement` | Secret ARN |
-| `rds-data:ExecuteStatement` | RDS Data API | SQL execution (TUI / GUI / `exec`) + `information_schema` fetch | Cluster ARN |
+| `rds-data:ExecuteStatement` | RDS Data API | SQL execution (TUI / `exec` / `ask`) + `information_schema` fetch | Cluster ARN |
 | `bedrock:ListInferenceProfiles` | Bedrock | First model-list load (AI features only) | `*` |
 | `bedrock:ListFoundationModels` | Bedrock | Fallback model list (AI features only) | `*` |
 | `bedrock:InvokeModel` | Bedrock Runtime | Ask / Review / Explain / Analyze via the Converse API | Inference profile ARN + foundation model ARN(s) |
@@ -506,7 +474,6 @@ Drop the `RdqBedrock*` statements when you do not use AI features, and drop `Rdq
 | --- | --- |
 | `rdq` (TUI default) | ✅ Implemented |
 | `rdq tui` | ✅ Implemented |
-| `rdq gui` | ✅ Implemented (separate React SPA, browser-based) |
 | `rdq exec <sql>` (one-shot CLI) | ✅ Implemented |
 | `rdq ask <prompt>` (one-shot CLI) | ✅ Implemented |
 | `rdq skills` (Agent Skill distribution) | ✅ Implemented (rdq-exec) |
@@ -519,7 +486,7 @@ Drop the `RdqBedrock*` statements when you do not use AI features, and drop `Rdq
 git clone https://github.com/Tocyuki/rdq.git
 cd rdq
 make hooks            # one-time: install the pre-commit gofmt guard
-make go-build         # Go-only build
+make build            # build ./rdq
 ./rdq --help
 
 make fmt              # gofmt -w .
@@ -533,7 +500,7 @@ installs a tiny pre-commit hook (`.githooks/pre-commit`) that runs
 CI" mistake before the commit lands without slowing down
 `git commit` with test runs.
 
-For the GUI mode (browser SPA), `make build` runs the Vite frontend build and embeds it into the Go binary. See `CLAUDE.md` for the layered architecture overview.
+See `CLAUDE.md` for the layered architecture overview.
 
 ## License
 

@@ -1,23 +1,10 @@
-.PHONY: build frontend-build go-build dev clean fmt fmt-check vet test check hooks
+.PHONY: build clean fmt fmt-check vet test check hooks
 
-build: frontend-build go-build
-
-frontend-build:
-	cd frontend && npm run build
-	mkdir -p internal/server/dist
-	find internal/server/dist -mindepth 1 ! -name '.gitkeep' -delete
-	cp -R frontend/dist/. internal/server/dist/
-
-go-build:
+build:
 	go build -o rdq ./cmd/rdq/
-
-dev:
-	cd frontend && npm run dev
 
 clean:
 	rm -f rdq
-	rm -rf frontend/dist
-	find internal/server/dist -mindepth 1 ! -name '.gitkeep' -delete
 
 # fmt rewrites every Go file in the repo with gofmt. Run this after
 # touching struct literals or anywhere alignment matters — or just run
