@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.0.11](https://github.com/Tocyuki/rdq/compare/v0.0.10...v0.0.11) - 2026-11-06
+
+- Edit current SQL from Ask AI popup by @Tocyuki in https://github.com/Tocyuki/rdq/pull/33
+- Harden SQL safety gates and fix concurrency, schema, and UI correctness bugs by @Tocyuki in https://github.com/Tocyuki/rdq/pull/35
+- refactor!: remove GUI mode and make rdq a TUI-only tool by @Tocyuki in https://github.com/Tocyuki/rdq/pull/36
+
 ## [v0.0.10](https://github.com/Tocyuki/rdq/compare/v0.0.9...v0.0.10) - 2026-06-24
 
 - feat(ai): per-(cluster, database) prompt context for Bedrock calls by @stdhkr in https://github.com/Tocyuki/rdq/pull/27
