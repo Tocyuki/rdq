@@ -87,6 +87,7 @@ export interface ExecuteRequestBody {
 export interface ExecuteResponseBody {
   columns: string[]
   rows: unknown[][]
+  /** Rows affected by a write; -1 for result-set (SELECT) responses. */
   updated: number
   durationMs: number
   // See ExecuteResponse.NeedsConfirmation in internal/server/types.go.
@@ -99,6 +100,8 @@ export interface SchemaColumn {
   table: string
   name: string
   type: string
+  /** 1-based position in the table's primary key; absent when not part of it. */
+  primaryKey?: number
 }
 
 export interface Schema {
@@ -107,6 +110,8 @@ export interface Schema {
   fetchedAt: string
   columns: SchemaColumn[]
   fromCache: boolean
+  /** False for old caches / failed PK lookups: primaryKey is then unknown. */
+  primaryKeysKnown: boolean
 }
 
 export interface SchemaRefreshBody {

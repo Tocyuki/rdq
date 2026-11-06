@@ -46,48 +46,43 @@ func (s *sessionStore) PersistToState() error {
 	if snap.Profile == "" {
 		return nil
 	}
-	st, err := state.Load()
-	if err != nil {
-		return err
-	}
-	ps := st.Get(snap.Profile)
-	ps.Cluster = snap.Cluster
-	ps.Secret = snap.Secret
-	ps.Database = snap.Database
-	if snap.BedrockModel != "" {
-		ps.BedrockModel = snap.BedrockModel
-	}
-	if snap.BedrockLanguage != "" {
-		ps.BedrockLanguage = snap.BedrockLanguage
-	}
-	if ps.ClusterSecrets == nil {
-		ps.ClusterSecrets = map[string]string{}
-	}
-	if snap.Cluster != "" && snap.Secret != "" {
-		ps.ClusterSecrets[snap.Cluster] = snap.Secret
-	}
-	// IsProduction is tri-state and cross-profile: we only overwrite when
-	// the SPA explicitly sent a value. A nil snap pointer means "SPA did
-	// not touch this field" (e.g. a profile switch) — in that case we
-	// leave the new profile's previously-stored flag alone so switching
-	// profiles does not leak the old profile's production status.
-	if snap.IsProduction != nil {
-		v := *snap.IsProduction
-		ps.IsProduction = &v
-	}
-	// Same conservative handling for IsReadOnly — the safety default
-	// (nil → treated as true) should never be overwritten unless the
-	// SPA explicitly chose a value.
-	if snap.IsReadOnly != nil {
-		v := *snap.IsReadOnly
-		ps.IsReadOnly = &v
-	}
-	if snap.AutoRunReadOnly != nil {
-		v := *snap.AutoRunReadOnly
-		ps.AutoRunReadOnly = &v
-	}
-	st.Set(snap.Profile, ps)
-	return st.Save()
+	return state.UpdateProfile(snap.Profile, func(ps *state.ProfileState) {
+		ps.Cluster = snap.Cluster
+		ps.Secret = snap.Secret
+		ps.Database = snap.Database
+		if snap.BedrockModel != "" {
+			ps.BedrockModel = snap.BedrockModel
+		}
+		if snap.BedrockLanguage != "" {
+			ps.BedrockLanguage = snap.BedrockLanguage
+		}
+		if ps.ClusterSecrets == nil {
+			ps.ClusterSecrets = map[string]string{}
+		}
+		if snap.Cluster != "" && snap.Secret != "" {
+			ps.ClusterSecrets[snap.Cluster] = snap.Secret
+		}
+		// IsProduction is tri-state and cross-profile: we only overwrite when
+		// the SPA explicitly sent a value. A nil snap pointer means "SPA did
+		// not touch this field" (e.g. a profile switch) — in that case we
+		// leave the new profile's previously-stored flag alone so switching
+		// profiles does not leak the old profile's production status.
+		if snap.IsProduction != nil {
+			v := *snap.IsProduction
+			ps.IsProduction = &v
+		}
+		// Same conservative handling for IsReadOnly — the safety default
+		// (nil → treated as true) should never be overwritten unless the
+		// SPA explicitly chose a value.
+		if snap.IsReadOnly != nil {
+			v := *snap.IsReadOnly
+			ps.IsReadOnly = &v
+		}
+		if snap.AutoRunReadOnly != nil {
+			v := *snap.AutoRunReadOnly
+			ps.AutoRunReadOnly = &v
+		}
+	})
 }
 
 // LoadFromState enriches a session seed with values persisted under the

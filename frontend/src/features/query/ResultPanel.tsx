@@ -123,7 +123,8 @@ export const ResultPanel = forwardRef<ResultPanelHandle, Props>(function ResultP
               <dt className="text-muted-foreground">Rows</dt>
               <dd>{result.rows.length}</dd>
               <dt className="text-muted-foreground">Rows affected</dt>
-              <dd>{result.updated}</dd>
+              {/* updated is -1 for result-set (SELECT) responses */}
+              <dd>{result.updated >= 0 ? result.updated : '—'}</dd>
               <dt className="text-muted-foreground">Duration</dt>
               <dd>{result.durationMs} ms</dd>
             </dl>

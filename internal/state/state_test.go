@@ -1,9 +1,12 @@
 package state
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -184,5 +187,54 @@ func TestSetThroughSavePreservesHistory(t *testing.T) {
 	want := []string{"second", "first"}
 	if !reflect.DeepEqual(ps.DatabaseHistory, want) {
 		t.Errorf("history mismatch: got %v, want %v", ps.DatabaseHistory, want)
+	}
+}
+
+// TestUpdateProfileConcurrent simulates several rdq processes updating
+// different profiles at once; a plain Load/Set/Save would lose some.
+func TestUpdateProfileConcurrent(t *testing.T) {
+	setStatePath(t)
+	const n = 30
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			err := UpdateProfile(fmt.Sprintf("p%d", i), func(ps *ProfileState) {
+				ps.Database = fmt.Sprintf("db%d", i)
+			})
+			if err != nil {
+				t.Error(err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	st, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		if got := st.Get(fmt.Sprintf("p%d", i)).Database; got != fmt.Sprintf("db%d", i) {
+			t.Errorf("profile p%d database = %q (lost update)", i, got)
+		}
+	}
+}
+
+func TestIsReadOnly(t *testing.T) {
+	yes, no := true, false
+	st := &State{Profiles: map[string]ProfileState{
+		"on":  {IsReadOnly: &yes},
+		"off": {IsReadOnly: &no},
+	}}
+	load := func() (*State, error) { return st, nil }
+	cases := map[string]bool{"on": true, "off": false, "never-set": true}
+	for profile, want := range cases {
+		if got, err := IsReadOnly(load, profile); got != want || err != nil {
+			t.Errorf("IsReadOnly(%q) = %v, %v; want %v", profile, got, err, want)
+		}
+	}
+	failing := func() (*State, error) { return nil, errors.New("corrupt") }
+	if got, err := IsReadOnly(failing, "off"); !got || err == nil {
+		t.Errorf("load failure must fail closed with an error, got %v, %v", got, err)
 	}
 }

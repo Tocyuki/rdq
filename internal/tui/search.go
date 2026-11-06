@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Tocyuki/rdq/internal/runner"
 	"github.com/charmbracelet/lipgloss"
@@ -13,7 +14,7 @@ type tableHit struct {
 	row    int
 	cell   int
 	col    int // byte offset in the formatted cell string
-	length int // byte length of the match
+	length int // byte length of the match in the cell (may differ from the query's)
 }
 
 // jsonHit locates a substring match inside the rendered JSON view. Offsets are
@@ -39,6 +40,86 @@ var (
 				Bold(true)
 )
 
+// findAllFold returns the [start, end) byte ranges of every
+// non-overlapping, case-insensitive occurrence of needle in hay. Offsets
+// index hay itself, so callers can slice the original text safely.
+//
+// strings.ToLower cannot be used to compute offsets because it is not
+// length-preserving for every rune (e.g. 'İ' grows from 2 to 3 bytes, the
+// Kelvin sign 'K' shrinks from 3 to 1), which would make offsets into the
+// lowered copy slice the original out of range or mid-rune.
+func findAllFold(hay, needle string) [][2]int {
+	if needle == "" || hay == "" {
+		return nil
+	}
+	if isASCII(hay) && isASCII(needle) {
+		// Fast path: ASCII lower-casing preserves byte offsets.
+		lowerHay, lowerNeedle := strings.ToLower(hay), strings.ToLower(needle)
+		var out [][2]int
+		for start := 0; ; {
+			idx := strings.Index(lowerHay[start:], lowerNeedle)
+			if idx < 0 {
+				return out
+			}
+			begin := start + idx
+			start = begin + len(lowerNeedle)
+			out = append(out, [2]int{begin, start})
+		}
+	}
+	n := utf8.RuneCountInString(needle)
+	var out [][2]int
+	for i := 0; i < len(hay); {
+		end := i
+		for k := 0; k < n && end < len(hay); k++ {
+			_, size := utf8.DecodeRuneInString(hay[end:])
+			end += size
+		}
+		if strings.EqualFold(hay[i:end], needle) {
+			out = append(out, [2]int{i, end})
+			i = end
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(hay[i:])
+		i += size
+	}
+	return out
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// highlightMatches renders text with every match of query wrapped in the
+// match style; the span for which isCurrent(start) is true uses the
+// brighter current-hit style instead.
+func highlightMatches(text, query string, isCurrent func(start int) bool) string {
+	if query == "" || text == "" {
+		return text
+	}
+	matches := findAllFold(text, query)
+	if len(matches) == 0 {
+		return text
+	}
+	var b strings.Builder
+	prev := 0
+	for _, mt := range matches {
+		b.WriteString(text[prev:mt[0]])
+		style := searchMatchStyle
+		if isCurrent(mt[0]) {
+			style = searchCurrentStyle
+		}
+		b.WriteString(style.Render(text[mt[0]:mt[1]]))
+		prev = mt[1]
+	}
+	b.WriteString(text[prev:])
+	return b.String()
+}
+
 // computeTableHits scans every cell in the result rows for case-insensitive
 // occurrences of query. Rows are walked in display order so n/N cycles
 // top-to-bottom, left-to-right across the full result set.
@@ -46,7 +127,6 @@ func computeTableHits(result *queryResult, query string) []tableHit {
 	if result == nil || query == "" {
 		return nil
 	}
-	needle := strings.ToLower(query)
 	var hits []tableHit
 	for r, row := range result.Rows {
 		for c := range result.Columns {
@@ -54,24 +134,8 @@ func computeTableHits(result *queryResult, query string) []tableHit {
 			if c < len(row) {
 				cell = row[c]
 			}
-			text := runner.FormatCell(cell)
-			lower := strings.ToLower(text)
-			start := 0
-			for {
-				idx := strings.Index(lower[start:], needle)
-				if idx < 0 {
-					break
-				}
-				hits = append(hits, tableHit{
-					row:    r,
-					cell:   c,
-					col:    start + idx,
-					length: len(needle),
-				})
-				start += idx + len(needle)
-				if len(needle) == 0 {
-					break
-				}
+			for _, mt := range findAllFold(runner.FormatCell(cell), query) {
+				hits = append(hits, tableHit{row: r, cell: c, col: mt[0], length: mt[1] - mt[0]})
 			}
 		}
 	}
@@ -84,26 +148,10 @@ func computeJSONHits(jsonRaw, query string) []jsonHit {
 	if jsonRaw == "" || query == "" {
 		return nil
 	}
-	needle := strings.ToLower(query)
 	var hits []jsonHit
-	lines := strings.Split(jsonRaw, "\n")
-	for i, line := range lines {
-		lower := strings.ToLower(line)
-		start := 0
-		for {
-			idx := strings.Index(lower[start:], needle)
-			if idx < 0 {
-				break
-			}
-			hits = append(hits, jsonHit{
-				line:   i,
-				col:    start + idx,
-				length: len(needle),
-			})
-			start += idx + len(needle)
-			if len(needle) == 0 {
-				break
-			}
+	for i, line := range strings.Split(jsonRaw, "\n") {
+		for _, mt := range findAllFold(line, query) {
+			hits = append(hits, jsonHit{line: i, col: mt[0], length: mt[1] - mt[0]})
 		}
 	}
 	return hits
@@ -120,34 +168,9 @@ func computeJSONHits(jsonRaw, query string) []jsonHit {
 // the pre-computed table hit offsets because truncation can shift or drop
 // occurrences near the right edge.
 func highlightCell(text, query string, cur *tableHit, row, cell int) string {
-	if query == "" || text == "" {
-		return text
-	}
-	needle := strings.ToLower(query)
-	lower := strings.ToLower(text)
-	var b strings.Builder
-	start := 0
-	for {
-		idx := strings.Index(lower[start:], needle)
-		if idx < 0 {
-			b.WriteString(text[start:])
-			break
-		}
-		b.WriteString(text[start : start+idx])
-		matchStart := start + idx
-		matchEnd := matchStart + len(needle)
-		span := text[matchStart:matchEnd]
-		style := searchMatchStyle
-		if cur != nil && cur.row == row && cur.cell == cell && cur.col == matchStart {
-			style = searchCurrentStyle
-		}
-		b.WriteString(style.Render(span))
-		start = matchEnd
-		if len(needle) == 0 {
-			break
-		}
-	}
-	return b.String()
+	return highlightMatches(text, query, func(start int) bool {
+		return cur != nil && cur.row == row && cur.cell == cell && cur.col == start
+	})
 }
 
 // highlightJSONLine decorates one plain-text JSON line with match highlights.
@@ -155,32 +178,7 @@ func highlightCell(text, query string, cur *tableHit, row, cell int) string {
 // style. Used only on lines where at least one match exists; untouched lines
 // keep their Chroma colouring in refreshJSON.
 func highlightJSONLine(line, query string, cur *jsonHit, lineIdx int) string {
-	if query == "" || line == "" {
-		return line
-	}
-	needle := strings.ToLower(query)
-	lower := strings.ToLower(line)
-	var b strings.Builder
-	start := 0
-	for {
-		idx := strings.Index(lower[start:], needle)
-		if idx < 0 {
-			b.WriteString(line[start:])
-			break
-		}
-		b.WriteString(line[start : start+idx])
-		matchStart := start + idx
-		matchEnd := matchStart + len(needle)
-		span := line[matchStart:matchEnd]
-		style := searchMatchStyle
-		if cur != nil && cur.line == lineIdx && cur.col == matchStart {
-			style = searchCurrentStyle
-		}
-		b.WriteString(style.Render(span))
-		start = matchEnd
-		if len(needle) == 0 {
-			break
-		}
-	}
-	return b.String()
+	return highlightMatches(line, query, func(start int) bool {
+		return cur != nil && cur.line == lineIdx && cur.col == start
+	})
 }

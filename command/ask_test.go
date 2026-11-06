@@ -320,6 +320,10 @@ func TestRunAsk_DestructiveInteractiveYes(t *testing.T) {
 	if !strings.Contains(stderr.String(), "(4 rows affected)") {
 		t.Errorf("expected affected count on stderr, got:\n%s", stderr.String())
 	}
+	// The confirmation prompt must be attributed to the ask subcommand.
+	if !strings.Contains(stderr.String(), "rdq ask: proceed? [y/N]") || strings.Contains(stderr.String(), "rdq exec:") {
+		t.Errorf("confirmation prompt should use the rdq ask prefix, got:\n%s", stderr.String())
+	}
 }
 
 func TestRunAsk_QuietSuppressesHeader(t *testing.T) {

@@ -135,55 +135,14 @@ func runAsk(c *AskCmd, globals *Globals, stdin io.Reader, stdout, stderr io.Writ
 		fmt.Fprintln(stderr, sql)
 	}
 
-	if isReadOnlyProfile(c.loadState, globals.Profile) && !runner.IsReadOnlySQL(sql) {
-		fmt.Fprintln(stderr, "rdq ask: "+runner.ErrWriteBlocked.Error())
-		fmt.Fprintln(stderr, "rdq ask: disable read-only mode in the TUI (F8) or GUI settings, then retry.")
-		recordHistory(globals, sql, runner.ErrWriteBlocked, 0)
-		return exitReadOnly
-	}
-
-	if need, reason := runner.NeedsConfirmation(sql); need && !c.Yes {
-		if !c.isTerminal(stdin) {
-			fmt.Fprintln(stderr, "rdq ask: destructive statement requires --yes in non-interactive mode.")
-			fmt.Fprintln(stderr, "rdq ask: "+reason)
-			return exitNotConfirmed
-		}
-		if !promptConfirm(stdin, stderr, reason) {
-			fmt.Fprintln(stderr, "rdq ask: aborted by user.")
-			return exitNotConfirmed
-		}
-	}
-
-	execCtx, cancelExec := context.WithTimeout(context.Background(), runner.ExecuteTimeout)
-	defer cancelExec()
-
-	target := runner.Target{
-		Profile:  globals.Profile,
-		Region:   globals.AWSConfig.Region,
-		Cluster:  globals.ClusterArn,
-		Secret:   globals.SecretArn,
-		Database: globals.Database,
-	}
-	res, elapsed, execErr := c.executeSQL(execCtx, globals.AWSConfig, target, sql)
-	recordHistory(globals, sql, execErr, elapsed)
-
-	if execErr != nil {
-		fmt.Fprintln(stderr, "rdq ask: "+execErr.Error())
-		switch {
-		case errors.Is(execErr, context.DeadlineExceeded):
-			return exitTimeout
-		case errors.Is(execErr, runner.ErrEmptySQL):
-			return exitUsage
-		default:
-			return exitError
-		}
-	}
-
-	if err := renderResult(stdout, stderr, res, c.Output); err != nil {
-		fmt.Fprintln(stderr, "rdq ask: "+err.Error())
-		return exitError
-	}
-	return exitSuccess
+	return sqlPipeline{
+		name:       "rdq ask",
+		yes:        c.Yes,
+		output:     c.Output,
+		executeSQL: c.executeSQL,
+		loadState:  c.loadState,
+		isTerminal: c.isTerminal,
+	}.run(globals, sql, stdin, stdout, stderr)
 }
 
 // setDefaultSeams wires production implementations for any seam the caller
@@ -199,7 +158,7 @@ func (c *AskCmd) setDefaultSeams() {
 		c.loadAictx = aictx.LoadContent
 	}
 	if c.executeSQL == nil {
-		c.executeSQL = defaultExecuteSQL
+		c.executeSQL = runner.ExecuteSQLWithConfig
 	}
 	if c.loadState == nil {
 		c.loadState = state.Load

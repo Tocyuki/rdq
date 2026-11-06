@@ -3,9 +3,11 @@ package tui
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Tocyuki/rdq/internal/bedrock"
 	"github.com/Tocyuki/rdq/internal/connection"
@@ -483,6 +485,60 @@ func TestOverlayAtCenterComposesWithoutCursorMovement(t *testing.T) {
 	}
 	if lines[1] != "abcdefghPOPlmnopqrst" {
 		t.Fatalf("overlay row = %q, want %q", lines[1], "abcdefghPOPlmnopqrst")
+	}
+}
+
+func TestExplainWithoutModelResumesAfterPicker(t *testing.T) {
+	bd := &bedrock.Client{}
+	m := newModel(nil, target{}, nil, bd, "", "Japanese", aws.Config{})
+	m.lastSQL = "SELECT * FROM missing"
+	m.lastErr = errors.New("relation \"missing\" does not exist")
+
+	if cmd := m.startExplain(); cmd == nil || !m.modelPickerOpen {
+		t.Fatalf("explain without a model should open the model picker")
+	}
+	if m.pendingAssist == nil {
+		t.Fatalf("pendingAssist should be armed while the picker is open")
+	}
+	// openModelPicker clears lastErr for its own status line; the
+	// continuation must still have the original error to explain.
+	if m.lastErr != nil {
+		t.Fatalf("precondition: openModelPicker is expected to clear lastErr")
+	}
+
+	m.bedrockModel = "claude"
+	if cmd := m.continuePending("Claude"); cmd == nil {
+		t.Fatalf("continuePending should dispatch the explain request")
+	}
+	if !m.explainExecuting {
+		t.Fatalf("explain should be executing after the picker closes")
+	}
+	if m.lastErr == nil || m.lastSQL != "SELECT * FROM missing" {
+		t.Fatalf("explained error/SQL not restored: err=%v sql=%q", m.lastErr, m.lastSQL)
+	}
+	if m.pendingAssist != nil {
+		t.Fatalf("pendingAssist should be cleared after resuming")
+	}
+}
+
+func TestReviewWithoutModelResumesAfterPicker(t *testing.T) {
+	bd := &bedrock.Client{}
+	m := newModel(nil, target{}, nil, bd, "", "Japanese", aws.Config{})
+	m.width, m.height = 100, 40
+	m.layout()
+	m.editor.SetValue("SELECT 1")
+
+	m.openReviewPrompt()
+	if !m.modelPickerOpen {
+		t.Fatalf("review without a model should open the model picker")
+	}
+	m.bedrockModel = "claude"
+	m.continuePending("Claude")
+	if !m.askOpen || m.askKind != askKindReview {
+		t.Fatalf("review focus prompt should open after the picker (askOpen=%v kind=%v)", m.askOpen, m.askKind)
+	}
+	if m.pendingReviewSQL != "SELECT 1" {
+		t.Fatalf("pendingReviewSQL = %q, want SELECT 1", m.pendingReviewSQL)
 	}
 }
 
@@ -2007,5 +2063,111 @@ func TestReadOnlyIndicatorInRenderStatus(t *testing.T) {
 	out = m.renderStatus()
 	if !strings.Contains(out, "allowed") {
 		t.Errorf("\"allowed\" indicator missing when isReadOnly=false:\n%s", out)
+	}
+}
+
+func TestScopedResultDroppedAfterTargetSwitch(t *testing.T) {
+	m := newModel(nil, target{profile: "", cluster: "arn:old", database: "old"}, nil, nil, "", "", aws.Config{})
+	m.width, m.height = 100, 40
+	m.layout()
+
+	// Start a query against the old target, then switch before it lands.
+	m.executing = true
+	staleCmd := m.scoped(func() tea.Msg {
+		return executeMsg{Result: makeResult(2, 2), SQL: "SELECT old"}
+	})
+	m.target.cluster = "arn:new"
+	m.finalizeTargetSwitch("new")
+	if m.executing {
+		t.Fatalf("target switch should clear the executing flag")
+	}
+
+	tm, _ := m.Update(staleCmd())
+	m = tm.(Model)
+	if m.result != nil || m.lastSQL != "" {
+		t.Fatalf("stale result applied after switch: result=%v lastSQL=%q", m.result, m.lastSQL)
+	}
+
+	// A result issued in the current session is still applied.
+	freshCmd := m.scoped(func() tea.Msg {
+		return executeMsg{Result: makeResult(1, 1), SQL: "SELECT new"}
+	})
+	tm, _ = m.Update(freshCmd())
+	m = tm.(Model)
+	if m.result == nil || m.lastSQL != "SELECT new" {
+		t.Fatalf("current-session result should be applied: result=%v lastSQL=%q", m.result, m.lastSQL)
+	}
+}
+
+func TestExecuteClosesRowInspector(t *testing.T) {
+	m := newModel(nil, target{}, nil, nil, "", "", aws.Config{})
+	m.width, m.height = 100, 40
+	m.layout()
+	m.result = makeResult(5, 2)
+	m.inspecting = true
+	m.inspectedRow = 4
+
+	tm, _ := m.Update(executeMsg{Result: makeResult(1, 1), SQL: "SELECT 1"})
+	m = tm.(Model)
+	if m.inspecting {
+		t.Fatalf("a new result should close the row inspector (old row index is invalid)")
+	}
+}
+
+func TestFindAllFoldUnicodeOffsets(t *testing.T) {
+	cases := []struct {
+		hay, needle string
+		want        [][2]int
+	}{
+		{"Tokyo tokyo", "TOKYO", [][2]int{{0, 5}, {6, 11}}},
+		{"東京タワー東京", "東京", [][2]int{{0, 6}, {15, 21}}},
+		// 'İ' lower-cases to 3 bytes; offsets must still index hay.
+		{"İİ abc", "abc", [][2]int{{5, 8}}},
+		// Kelvin sign (3 bytes) folds to ASCII 'k'.
+		{"Kelvin", "kelvin", [][2]int{{0, 8}}},
+		{"abc", "", nil},
+		{"", "a", nil},
+	}
+	for _, tc := range cases {
+		got := findAllFold(tc.hay, tc.needle)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("findAllFold(%q, %q) = %v, want %v", tc.hay, tc.needle, got, tc.want)
+			continue
+		}
+		for _, mt := range got {
+			_ = tc.hay[mt[0]:mt[1]] // must not panic
+		}
+	}
+	// Must not panic on runes whose lower-case form changes byte length.
+	_ = highlightCell("İİİİ x", "x", nil, 0, 0)
+	_ = highlightJSONLine("KK k", "k", nil, 0)
+}
+
+func TestContainsFilterRuneIndexes(t *testing.T) {
+	ranks := containsFilter("db", []string{"本番db", "staging", "DB_main"})
+	if len(ranks) != 2 {
+		t.Fatalf("got %d ranks, want 2: %+v", len(ranks), ranks)
+	}
+	// "本番db": 'd' is the 3rd rune (index 2) even though it is byte 6.
+	if !reflect.DeepEqual(ranks[0].MatchedIndexes, []int{2, 3}) {
+		t.Errorf("本番db matched = %v, want [2 3]", ranks[0].MatchedIndexes)
+	}
+	if ranks[1].Index != 2 || !reflect.DeepEqual(ranks[1].MatchedIndexes, []int{0, 1}) {
+		t.Errorf("DB_main rank = %+v, want index 2 matched [0 1]", ranks[1])
+	}
+	// Substring, not fuzzy: "lla" must not match "Claude".
+	if got := containsFilter("lla", []string{"Claude"}); len(got) != 0 {
+		t.Errorf("containsFilter should be a literal substring match, got %+v", got)
+	}
+}
+
+func TestTruncateForPromptRuneBoundary(t *testing.T) {
+	s := strings.Repeat("あ", 10)    // 30 bytes
+	got := truncateForPrompt(s, 16) // byte 16 is mid-rune
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateForPrompt produced invalid UTF-8: %q", got)
+	}
+	if !strings.HasPrefix(got, strings.Repeat("あ", 5)+"\n") {
+		t.Fatalf("truncateForPrompt = %q, want 5 runes + marker", got)
 	}
 }

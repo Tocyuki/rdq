@@ -279,7 +279,7 @@ func TestAIAskTagsReadOnlyClassification(t *testing.T) {
 	}{
 		"select":                 {"SELECT 1;", true, true},
 		"explain":                {"EXPLAIN ANALYZE SELECT 1;", true, false},
-		"explain analyze delete": {"EXPLAIN ANALYZE DELETE FROM users;", true, false},
+		"explain analyze delete": {"EXPLAIN ANALYZE DELETE FROM users;", false, false}, // EXPLAIN ANALYZE executes the DELETE
 		"insert":                 {"INSERT INTO users(id) VALUES (1);", false, false},
 		"delete":                 {"DELETE FROM users WHERE id = 1;", false, false},
 		"comments":               {"-- comment\nSELECT 1;", true, true},

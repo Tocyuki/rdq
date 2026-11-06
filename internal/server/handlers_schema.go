@@ -35,8 +35,6 @@ func newSchemaHandlers(cache *awsCache) *schemaHandlers {
 	}
 }
 
-const schemaFetchTimeout = 30 * time.Second
-
 // get serves GET /api/schema. Cache hits (profile unused) return immediately
 // so the SPA can show the schema while the user is typing, without waiting
 // on AWS. Misses fall through to a synchronous fetch with a 30-second cap.
@@ -92,7 +90,7 @@ func (h *schemaHandlers) refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *schemaHandlers) fetchAndSave(ctx context.Context, profile, cluster, secret, database string) (*schema.Snapshot, error) {
-	ctx, cancel := context.WithTimeout(ctx, schemaFetchTimeout)
+	ctx, cancel := context.WithTimeout(ctx, schema.FetchTimeout)
 	defer cancel()
 
 	cfg, err := h.awsCache.Get(ctx, profile)
@@ -119,10 +117,13 @@ func snapshotToDTO(s *schema.Snapshot, fromCache bool) SchemaDTO {
 		FetchedAt: s.FetchedAt.UTC().Format(time.RFC3339Nano),
 		Columns:   make([]SchemaColumnDTO, 0, len(s.Columns)),
 		FromCache: fromCache,
+
+		PrimaryKeysKnown: s.PrimaryKeysKnown,
 	}
 	for _, c := range s.Columns {
 		dto.Columns = append(dto.Columns, SchemaColumnDTO{
 			Schema: c.Schema, Table: c.Table, Name: c.Name, Type: c.Type,
+			PrimaryKey: c.PrimaryKey,
 		})
 	}
 	return dto

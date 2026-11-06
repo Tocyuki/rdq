@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata/types"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Result is a UI-friendly view of an RDS Data API ExecuteStatement response.
@@ -63,6 +64,14 @@ func ConvertResult(out *rdsdata.ExecuteStatementOutput) *Result {
 		return &Result{}
 	}
 	res := &Result{Updated: out.NumberOfRecordsUpdated}
+	// The Data API reports NumberOfRecordsUpdated=0 for SELECTs, which is
+	// indistinguishable from a write that touched no rows. A response that
+	// carries column metadata is result-set shaped, so mark it "not
+	// applicable" per the Updated contract. (INSERT ... RETURNING also lands
+	// here; its row count is still visible via len(Rows).)
+	if len(out.ColumnMetadata) > 0 {
+		res.Updated = -1
+	}
 
 	for _, col := range out.ColumnMetadata {
 		res.Columns = append(res.Columns, aws.ToString(col.Name))
@@ -156,7 +165,7 @@ func FormatCell(v any) string {
 	}
 	switch val := v.(type) {
 	case string:
-		return val
+		return EscapeControl(val)
 	case int64:
 		return strconv.FormatInt(val, 10)
 	case float64:
@@ -168,7 +177,46 @@ func FormatCell(v any) string {
 	case []any:
 		return formatArray(val)
 	}
-	return fmt.Sprintf("%v", v)
+	return EscapeControl(fmt.Sprintf("%v", v))
+}
+
+// EscapeControl makes C0 / C1 control characters (ESC, BEL, CR, ...) and
+// DEL visible as Go-style escapes (`\n`, `\t`, `\x1b`, `\u009b`) for
+// terminal display. Database values are untrusted: printed raw, an ESC or
+// OSC sequence in a cell could rewrite the screen, set the window title or
+// write the clipboard (OSC 52), and newlines / tabs break table layout.
+// Only display paths use this — CSV / JSON exports keep the raw value.
+func EscapeControl(s string) string {
+	if !strings.ContainsFunc(s, isControlRune) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		if !isControlRune(r) {
+			b.WriteRune(r)
+			continue
+		}
+		switch r {
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x80 {
+				fmt.Fprintf(&b, `\x%02x`, r)
+			} else {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			}
+		}
+	}
+	return b.String()
+}
+
+func isControlRune(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
 }
 
 func formatArray(arr []any) string {
@@ -192,7 +240,7 @@ func formatArray(arr []any) string {
 func ColumnWidths(columns []string, rows [][]any) []int {
 	widths := make([]int, len(columns))
 	for i, c := range columns {
-		widths[i] = DisplayWidth(c)
+		widths[i] = DisplayWidth(EscapeControl(c))
 	}
 	for _, row := range rows {
 		for i, cell := range row {
@@ -216,27 +264,25 @@ func ColumnWidths(columns []string, rows [][]any) []int {
 	return widths
 }
 
-// DisplayWidth approximates the visible width of a cell. We deliberately use
-// rune count rather than wcwidth because the input is already free of escape
-// sequences and the table width only needs to be roughly accurate.
+// DisplayWidth returns the number of terminal cells s occupies. East Asian
+// wide characters and most emoji take two cells, so counting runes would
+// under-measure Japanese / Chinese / Korean data and misalign table columns
+// (bubbles/table measures cells the same way).
 func DisplayWidth(s string) int {
-	return len([]rune(s))
+	return ansi.StringWidth(s)
 }
 
 // Truncate shortens s to at most width display cells, appending an ellipsis
-// when content was dropped.
+// when content was dropped. Wide characters are never split, so the result
+// may be one cell narrower than width.
 func Truncate(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	runes := []rune(s)
-	if len(runes) <= width {
+	if DisplayWidth(s) <= width {
 		return s
 	}
-	if width == 1 {
-		return "…"
-	}
-	return string(runes[:width-1]) + "…"
+	return ansi.Truncate(s, width, "…")
 }
 
 // RowJSON renders a single row as a pretty-printed JSON object with the

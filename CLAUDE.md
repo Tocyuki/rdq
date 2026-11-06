@@ -92,11 +92,12 @@ Three layers, with most of the code living in the third:
    | `awsauth/` | SDK config loading, profile enumeration + pre-TUI picker (`go-fuzzyfinder`), STS identity verification |
    | `bedrock/` | Amazon Bedrock Converse client + prompt templates (`prompt.go`) |
    | `connection/` | Aurora cluster / Secrets Manager / database discovery + selection (`cluster.go`, `secret.go`, `database.go`) |
+   | `fsutil/` | Atomic file write (`WriteFileAtomic`) + inter-process lock (`WithLock`, flock / LockFileEx) shared by `state/`, `history/`, `schema/` so concurrent rdq processes (TUI + GUI + CLI) never lose each other's writes |
    | `history/` | Per-profile SQL history persisted as JSONL with favourites |
    | `runner/` | RDS Data API execution (`runner.go`), result rendering (`result.go`, `render.go`), read-only classifier (`readonly.go`), destructive-statement gate (`confirm.go`). Shared by `command/exec.go`, `command/ask.go`, `internal/server/handlers_execute.go`, and `internal/tui/runner.go` so all four surfaces apply identical policies. |
    | `schema/` | `information_schema` fetch + on-disk cache keyed by (cluster, database) |
    | `server/` | GUI mode backend: `embed.go` (`//go:embed all:dist`) + `server.go` (`/api/health` + `http.FileServer`) |
-   | `state/` | Per-profile state cache (`state.json`): cluster / secret / database / bedrock model + language / cluster→secret map / database history |
+   | `state/` | Per-profile state cache (`state.json`): cluster / secret / database / bedrock model + language / cluster→secret map / database history. Mutate via `state.UpdateProfile` (locked read-modify-write), not `Load`+`Save` |
    | `tui/` | Bubble Tea app. `tui.go` entry, `model.go` the main state machine, `keys.go` all keybindings, `ai.go` Bedrock integration, `result.go` result viewer + row inspector, `export.go` CSV export, `highlight.go` SQL/JSON syntax highlighting via chroma. Tests: `model_test.go`, `result_test.go`, `export_test.go`, `highlight_test.go` |
 
    `frontend/` is a standalone Vite + React SPA. Its `npm run build`

@@ -1,8 +1,12 @@
 package bedrock
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	rttypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/Tocyuki/rdq/internal/schema"
 )
@@ -226,6 +230,44 @@ func TestInferenceConfigurationForModel(t *testing.T) {
 			}
 			if hasTemperature := got.Temperature != nil; hasTemperature != tc.wantTemperature {
 				t.Errorf("Temperature presence=%v, want %v", hasTemperature, tc.wantTemperature)
+			}
+		})
+	}
+}
+
+func TestConverseReplyText(t *testing.T) {
+	msg := func(blocks ...rttypes.ContentBlock) rttypes.ConverseOutput {
+		return &rttypes.ConverseOutputMemberMessage{Value: rttypes.Message{Content: blocks}}
+	}
+	text := func(s string) rttypes.ContentBlock { return &rttypes.ContentBlockMemberText{Value: s} }
+
+	cases := []struct {
+		name     string
+		out      *bedrockruntime.ConverseOutput
+		want     string
+		wantErr  bool
+		wantTrun bool
+	}{
+		{"nil", nil, "", true, false},
+		{"end turn", &bedrockruntime.ConverseOutput{Output: msg(text("SELECT "), text("1")), StopReason: rttypes.StopReasonEndTurn}, "SELECT 1", false, false},
+		{"zero stop reason", &bedrockruntime.ConverseOutput{Output: msg(text("ok"))}, "ok", false, false},
+		{"max tokens", &bedrockruntime.ConverseOutput{Output: msg(text("SELECT * FROM t WHE")), StopReason: rttypes.StopReasonMaxTokens}, "SELECT * FROM t WHE", true, true},
+		{"content filtered", &bedrockruntime.ConverseOutput{Output: msg(text("x")), StopReason: rttypes.StopReasonContentFiltered}, "", true, false},
+		{"guardrail", &bedrockruntime.ConverseOutput{Output: msg(text("x")), StopReason: rttypes.StopReasonGuardrailIntervened}, "", true, false},
+		{"whitespace only", &bedrockruntime.ConverseOutput{Output: msg(text("  \n"))}, "", true, false},
+		{"no content", &bedrockruntime.ConverseOutput{Output: msg()}, "", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := converseReplyText(tc.out)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if errors.Is(err, ErrTruncated) != tc.wantTrun {
+				t.Errorf("errors.Is(err, ErrTruncated) = %v, want %v", errors.Is(err, ErrTruncated), tc.wantTrun)
+			}
+			if got != tc.want {
+				t.Errorf("text = %q, want %q", got, tc.want)
 			}
 		})
 	}

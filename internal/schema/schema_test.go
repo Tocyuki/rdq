@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	t.Setenv("RDQ_SCHEMA_DIR", dir)
 
 	s := &Snapshot{
+		Version:   snapshotVersion,
 		Cluster:   "arn:aws:rds:ap-northeast-1:111:cluster:my",
 		Database:  "myapp",
 		FetchedAt: time.Now().UTC().Truncate(time.Second),
@@ -117,5 +119,49 @@ func TestToPromptEmpty(t *testing.T) {
 	out := s.ToPrompt()
 	if out != "(no schema available)" {
 		t.Errorf("expected fallback message, got %q", out)
+	}
+}
+
+// TestLoadCacheTreatsOldVersionAsMiss: caches written before primary-key
+// support (no version field) must be refetched, otherwise the GUI preview
+// would fall back to ordering by every column on tables that have a PK.
+func TestLoadCacheTreatsOldVersionAsMiss(t *testing.T) {
+	t.Setenv("RDQ_SCHEMA_DIR", t.TempDir())
+	cluster, database := "arn:c", "db"
+	path, err := cachePath(cluster, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"cluster":"arn:c","database":"db","fetched_at":"2026-01-01T00:00:00Z","columns":[{"schema":"public","table":"t","name":"id","type":"integer"}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := LoadCache(cluster, database); err != nil || got != nil {
+		t.Fatalf("legacy cache should be a miss, got %+v, %v", got, err)
+	}
+
+	// A current-version cache is served even when the PK lookup had
+	// failed (PrimaryKeysKnown=false), so it is not refetched every time.
+	current := &Snapshot{Version: snapshotVersion, Cluster: cluster, Database: database,
+		Columns: []Column{{Schema: "public", Table: "t", Name: "id", Type: "integer"}}}
+	if err := SaveCache(current); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := LoadCache(cluster, database); err != nil || got == nil {
+		t.Fatalf("current cache should load, got %+v, %v", got, err)
+	}
+}
+
+func TestFetchStampsSnapshotVersion(t *testing.T) {
+	f := &fakeExec{columns: manyColumns(1)}
+	snap, err := fetchWith(t.Context(), f.exec, "arn:c", "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Version != snapshotVersion {
+		t.Fatalf("Version = %d, want %d", snap.Version, snapshotVersion)
 	}
 }

@@ -47,6 +47,8 @@ import {
   PREVIEW_COUNT_QUERY_KEY,
   PREVIEW_PAGE_SIZE,
   PREVIEW_QUERY_KEY,
+  type PreviewColumn,
+  stableOrderColumns,
   usePreviewCount,
   usePreviewQuery,
 } from './usePreviewQuery'
@@ -101,10 +103,7 @@ function operatorLabel(op: PreviewFilterOp): string {
   return op
 }
 
-interface ColumnInfo {
-  name: string
-  type: string
-}
+type ColumnInfo = PreviewColumn
 
 /**
  * PreviewPanel is the Supabase / Drizzle Studio-style table viewer
@@ -138,6 +137,23 @@ export function PreviewPanel() {
 
   const sessionReady = sessionIsComplete(session.data)
 
+  const targetSchema = previewTarget?.schema
+  const targetTable = previewTarget?.table
+
+  const tableColumns = useMemo<ColumnInfo[]>(() => {
+    if (!targetSchema || !targetTable) return []
+    const cols = schema.data?.columns ?? []
+    return cols
+      .filter((c) => c.schema === targetSchema && c.table === targetTable)
+      .map((c) => ({ name: c.name, type: c.type, primaryKey: c.primaryKey }))
+  }, [schema.data, targetSchema, targetTable])
+
+  const primaryKeysKnown = schema.data?.primaryKeysKnown ?? false
+  const orderKeys = useMemo(
+    () => stableOrderColumns(tableColumns, primaryKeysKnown),
+    [tableColumns, primaryKeysKnown],
+  )
+
   const previewQuery = usePreviewQuery({
     profile: session.data?.profile ?? '',
     cluster: session.data?.cluster ?? '',
@@ -148,7 +164,11 @@ export function PreviewPanel() {
     offset: previewTarget?.offset ?? 0,
     sort: previewTarget?.sort ?? null,
     filters: previewTarget?.filters ?? [],
-    enabled: sessionReady && previewTarget !== null,
+    orderKeys,
+    // Wait for the schema so the first page already uses the stable
+    // ORDER BY (otherwise page 1 and page 2 could disagree on order).
+    // A failed schema load falls through to an unordered preview.
+    enabled: sessionReady && previewTarget !== null && !schema.isPending,
   })
 
   const countQuery = usePreviewCount({
@@ -164,17 +184,6 @@ export function PreviewPanel() {
 
   const result = previewQuery.data ?? null
   const totalCount = countQuery.data
-
-  const targetSchema = previewTarget?.schema
-  const targetTable = previewTarget?.table
-
-  const tableColumns = useMemo<ColumnInfo[]>(() => {
-    if (!targetSchema || !targetTable) return []
-    const cols = schema.data?.columns ?? []
-    return cols
-      .filter((c) => c.schema === targetSchema && c.table === targetTable)
-      .map((c) => ({ name: c.name, type: c.type }))
-  }, [schema.data, targetSchema, targetTable])
 
   // Esc closes preview unless a dialog or input is in focus.
   useEffect(() => {
@@ -192,7 +201,7 @@ export function PreviewPanel() {
 
   if (!previewTarget) return null
   const target = previewTarget
-  const sql = buildPreviewSQL(target.schema, target.table, target.offset, target.sort, target.filters)
+  const sql = buildPreviewSQL(target.schema, target.table, target.offset, target.sort, target.filters, orderKeys)
   const loading = previewQuery.isLoading || previewQuery.isFetching
   const error = previewQuery.error?.message ?? null
   const countError = countQuery.error?.message ?? null

@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/Tocyuki/rdq/internal/fsutil"
 )
 
 // historyLimit caps the database name history per profile. The most recent
@@ -103,50 +105,69 @@ func (s *State) Set(profile string, ps ProfileState) {
 	s.Profiles[profileKey(profile)] = ps
 }
 
-// Save writes the state to disk atomically (tempfile + rename).
+// Save writes the state to disk atomically (tempfile + rename) under the
+// state lock. Prefer UpdateProfile for read-modify-write: Load followed by
+// Save can still overwrite a change another rdq process made in between.
 func (s *State) Save() error {
-	path := s.path
-	if path == "" {
-		var err error
-		path, err = resolvePath()
+	path, err := s.resolvedPath()
+	if err != nil {
+		return err
+	}
+	return fsutil.WithLock(path, func() error { return s.writeTo(path) })
+}
+
+// UpdateProfile atomically applies fn to one profile's entry: it takes the
+// inter-process state lock, re-reads state.json, lets fn mutate the
+// profile, and writes the result back before releasing the lock. Because
+// the read happens under the lock, concurrent rdq processes (TUI, GUI
+// server, CLI) never lose each other's updates — including updates to
+// other profiles, which a plain Load/Save would overwrite with stale data.
+func UpdateProfile(profile string, fn func(ps *ProfileState)) error {
+	path, err := resolvePath()
+	if err != nil {
+		return err
+	}
+	return fsutil.WithLock(path, func() error {
+		s, err := Load()
 		if err != nil {
 			return err
 		}
-	}
+		ps := s.Get(profile)
+		fn(&ps)
+		s.Set(profile, ps)
+		return s.writeTo(path)
+	})
+}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create state directory: %w", err)
+// IsReadOnly resolves the per-profile read-only policy. A profile that has
+// never been toggled (nil flag) is read-only, so fresh installs are safe
+// until the user explicitly opts into writes. If load fails the result is
+// also read-only (fail closed) and the error is returned for logging.
+func IsReadOnly(load func() (*State, error), profile string) (bool, error) {
+	st, err := load()
+	if err != nil {
+		return true, err
 	}
+	ps := st.Get(profile)
+	if ps.IsReadOnly == nil {
+		return true, nil
+	}
+	return *ps.IsReadOnly, nil
+}
 
+func (s *State) resolvedPath() (string, error) {
+	if s.path != "" {
+		return s.path, nil
+	}
+	return resolvePath()
+}
+
+func (s *State) writeTo(path string) error {
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal state: %w", err)
 	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".state-*.json")
-	if err != nil {
-		return fmt.Errorf("create temp state file: %w", err)
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("write temp state file: %w", err)
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("chmod temp state file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp state file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename state file: %w", err)
-	}
-	return nil
+	return fsutil.WriteFileAtomic(path, data, 0o600)
 }
 
 // resolvePath returns the state file path, honoring RDQ_STATE_FILE for tests.
