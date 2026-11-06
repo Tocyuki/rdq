@@ -1,7 +1,7 @@
 // Package runner executes SQL statements against the AWS RDS Data API and
 // shapes the response into a UI-friendly Result. It is deliberately free of
-// any terminal/bubbletea or HTTP concerns so the TUI, CLI, and GUI can all
-// reuse the same engine.
+// any terminal/bubbletea concerns so the TUI and CLI can both reuse the same
+// engine.
 package runner
 
 import (
@@ -15,7 +15,7 @@ import (
 )
 
 // Target captures the RDS Data API connection coordinates resolved by the
-// caller (command layer for TUI, HTTP handler for GUI).
+// caller (the command layer for the TUI and CLI).
 type Target struct {
 	Profile  string
 	Region   string
@@ -36,13 +36,13 @@ var ErrEmptySQL = errors.New("enter a SQL statement to run")
 
 // ExecuteSQLWithConfig builds a Data API client from cfg and runs sql via
 // ExecuteSQL. It is the production implementation behind the executeSQL
-// seams in the CLI (command/) and the GUI server (internal/server/).
+// seams in the CLI (command/).
 func ExecuteSQLWithConfig(ctx context.Context, cfg aws.Config, target Target, sql string) (*Result, time.Duration, error) {
 	return ExecuteSQL(ctx, rdsdata.NewFromConfig(cfg), target, sql)
 }
 
 // ExecuteSQL runs the given SQL against the Data API and returns a parsed
-// Result. It is a synchronous, side-effect free function so HTTP handlers and
+// Result. It is a synchronous, side-effect free function so CLI commands and
 // tea.Cmd wrappers can share it. The caller is responsible for history logging.
 func ExecuteSQL(ctx context.Context, client *rdsdata.Client, target Target, sql string) (*Result, time.Duration, error) {
 	trimmed := strings.TrimSpace(sql)

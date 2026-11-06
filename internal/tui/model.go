@@ -3655,7 +3655,7 @@ func (m *Model) persistBedrockSettings() error {
 // loadReadOnlyFlag hydrates m.isReadOnly from state.json for the active
 // profile. The flag defaults to ON when the profile has never been
 // answered (nil in state) or when we cannot read state — the same
-// "safe-by-default" stance the GUI execute handler takes. Ephemeral
+// "safe-by-default" stance `rdq exec` / `rdq ask` take. Ephemeral
 // mode (empty profile name) is also treated as read-only.
 func (m *Model) loadReadOnlyFlag() {
 	if m.target.profile == "" {

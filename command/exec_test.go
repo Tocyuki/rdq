@@ -182,7 +182,7 @@ func TestRunExec_ReadOnlyBlocksWrite(t *testing.T) {
 		t.Errorf("expected read-only message, got:\n%s", stderr.String())
 	}
 	// History should record the blocked attempt so users see it in the
-	// picker the same way the GUI does.
+	// TUI history picker.
 	data, _ := os.ReadFile(histPath)
 	if !strings.Contains(string(data), "read-only") {
 		t.Errorf("expected read-only block to be recorded in history, got:\n%s", data)

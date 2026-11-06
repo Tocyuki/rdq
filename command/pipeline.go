@@ -14,9 +14,8 @@ import (
 
 // sqlPipeline is the downstream half shared by `rdq exec` and `rdq ask`:
 // read-only gate → destructive confirmation → Data API → history → render.
-// Keeping one implementation guarantees both commands (and, by mirroring
-// internal/server/handlers_execute.go, the GUI/TUI) apply identical
-// policies and exit codes.
+// Keeping one implementation guarantees both commands apply identical
+// policies and exit codes (and match the gates the TUI applies).
 type sqlPipeline struct {
 	name   string // stderr prefix, e.g. "rdq exec"
 	yes    bool   // --yes: skip destructive confirmation
@@ -34,7 +33,7 @@ func (p sqlPipeline) run(globals *Globals, sql string, stdin io.Reader, stdout, 
 
 	if isReadOnlyProfile(p.loadState, globals.Profile) && !runner.IsReadOnlySQL(sql) {
 		errorf(runner.ErrWriteBlocked.Error())
-		errorf("disable read-only mode in the TUI (F8) or GUI settings, then retry.")
+		errorf("disable read-only mode in the TUI (F8), then retry.")
 		recordHistory(p.name, globals, sql, runner.ErrWriteBlocked, 0)
 		return exitReadOnly
 	}

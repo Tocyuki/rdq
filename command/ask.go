@@ -171,7 +171,7 @@ func (c *AskCmd) setDefaultSeams() {
 // defaultAskBedrock wraps bedrock.Client.Ask so the seam signature matches
 // the per-invocation call. Mirrors defaultExecuteSQL's thin-adapter role:
 // a fresh Bedrock client per run keeps `command/` independent of any
-// long-lived SDK client ownership decisions the TUI / GUI might make.
+// long-lived SDK client ownership decisions the TUI might make.
 func defaultAskBedrock(ctx context.Context, cfg aws.Config, modelID, systemPrompt, userPrompt string) (string, error) {
 	client := bedrock.New(cfg)
 	messages := []bedrock.Message{{Role: bedrock.RoleUser, Text: userPrompt}}

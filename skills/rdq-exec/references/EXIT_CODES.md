@@ -7,7 +7,7 @@ Source of truth: [`command/exec.go`](https://github.com/Tocyuki/rdq/blob/main/co
 | 0 | `exitSuccess` | Statement ran and result rendered | Result in chosen format | `(N rows affected)` for writes | Use the result |
 | 1 | `exitError` | AWS error, SQL error, render failure, or any non-categorized error | Empty | `rdq exec: <error>` | Read the error; do not retry without diagnosing |
 | 2 | `exitUsage` | No SQL provided, both positional + `--file`, empty SQL after read, unsupported `--output` | Empty | `rdq exec: <usage hint>` | Fix the invocation |
-| 3 | `exitReadOnly` | Profile is read-only and SQL is a write | Empty | `rdq exec: writes are blocked in read-only mode` + hint | **User must toggle read-only off** via `rdq tui` (`F8`) or GUI Settings; do not auto-flip |
+| 3 | `exitReadOnly` | Profile is read-only and SQL is a write | Empty | `rdq exec: writes are blocked in read-only mode` + hint | **User must toggle read-only off** via `rdq tui` (`F8`); do not auto-flip |
 | 4 | `exitNotConfirmed` | Destructive SQL (DELETE/UPDATE without top-level WHERE, TRUNCATE, multiple statements) without `--yes` in non-TTY, or user answered "n" in TTY | Empty | `rdq exec: destructive statement requires --yes...` or `aborted by user` | Show user the SQL, get consent, re-run with `-y` |
 | 5 | `exitTimeout` | AWS request exceeded `runner.ExecuteTimeout` | Empty | `rdq exec: context deadline exceeded` | Narrow the query; the Data API has its own timeout under heavy contention |
 

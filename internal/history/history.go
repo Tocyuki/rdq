@@ -1,5 +1,5 @@
 // Package history persists executed SQL statements as a per-line JSON log so
-// the TUI and GUI can recall them via an incremental search picker.
+// the TUI can recall them via an incremental search picker.
 //
 // The on-disk format is JSON Lines (one entry per line) at
 // ~/.rdq/history.jsonl, overridable via the RDQ_HISTORY_FILE env var. Append
@@ -68,9 +68,8 @@ func (s *Store) Path() string { return s.path }
 // place (via the same tempfile+rename path SetFavorite uses). Histories
 // are typically small (< a few thousand lines) so the cost is negligible,
 // and the tradeoff buys simple in-order recall by Load. The whole
-// read-modify-write runs under an inter-process lock so a TUI, the GUI
-// server and `rdq exec` appending at the same time never drop each
-// other's entries.
+// read-modify-write runs under an inter-process lock so TUI sessions and
+// `rdq exec` appending at the same time never drop each other's entries.
 func (s *Store) Append(e Entry) error {
 	return fsutil.WithLock(s.path, func() error {
 		lines, err := s.readLines()
@@ -97,7 +96,7 @@ func (s *Store) Append(e Entry) error {
 }
 
 // Record appends the outcome of one statement execution. It is the single
-// place the TUI, GUI and CLI build history entries from, so all surfaces
+// place the TUI and CLI build history entries from, so all surfaces
 // record identical fields. Ephemeral mode (empty profile) is a no-op: direct
 // credentials runs leave no on-disk trace.
 func (s *Store) Record(profile, database, sql string, execErr error, elapsed time.Duration) error {

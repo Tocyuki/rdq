@@ -32,7 +32,7 @@ const (
 )
 
 // ExecCmd is the Kong struct for `rdq exec`. The stub was replaced with a
-// one-shot runner that reuses the same engine the TUI and GUI talk to.
+// one-shot runner that reuses the same engine the TUI talks to.
 //
 // SQL is optional as a positional arg so users can supply it via --file
 // instead. Mutually exclusive with --file; both empty or both set is a
@@ -64,11 +64,10 @@ func (c *ExecCmd) Run(globals *Globals) error {
 // touches os.Std* directly so test code can feed in its own buffers and
 // assert on the exit code that the real Run() would have produced.
 //
-// The pipeline mirrors internal/server/handlers_execute.go so the three
-// surfaces (TUI, GUI, CLI) agree on every policy: read-only gating first,
-// destructive confirmation second, execute third, history fourth. Diverging
-// here would surprise users who flip read-only in the GUI and expect the
-// CLI to honour it.
+// The pipeline matches the TUI so both surfaces (TUI, CLI) agree on every
+// policy: read-only gating first, destructive confirmation second, execute
+// third, history fourth. Diverging here would surprise users who flip
+// read-only in the TUI and expect the CLI to honour it.
 func runExec(c *ExecCmd, globals *Globals, stdin io.Reader, stdout, stderr io.Writer) int {
 	c.setDefaultSeams()
 
